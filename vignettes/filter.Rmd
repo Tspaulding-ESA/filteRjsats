@@ -14,13 +14,14 @@ knitr::opts_chunk$set(
 )
 ```
 ```{r setup}
-library(filteRjsats)
+# NOT RUN
+#library(filteRjsats)
 ```
 
 
 ```{r choose a directory and generate a list of files, echo=TRUE}
 # Choose a Directory 
-path <- dir("inst", full.names = TRUE)
+path <- "C:/Users/tspaulding/Documents/R/JSATS_Acoustic_Telemetry/1.Data/Inputs/raw"
 
 # List Files in Directory
 file <- list.files(path = path, recursive = TRUE)
