@@ -44,7 +44,7 @@ get_tagged_fish <- function(important_fields = NULL) {
                       fields = fields)
   }, error = function(e) {
     message("⚠️ Failed to download data from ERDDAP. Error message: ", e$message)
-    return(NULL)
+    return(data.frame())
   })
 
   # Stop if data retrieval failed
