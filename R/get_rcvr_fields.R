@@ -19,7 +19,7 @@ get_rcvr_fields <- function() {
     return(NULL)
   })
 
-  if (is.null(info)) return(invisible(NULL))
+  if (is.null(info)) return(NULL)
 
   info$variables
 }

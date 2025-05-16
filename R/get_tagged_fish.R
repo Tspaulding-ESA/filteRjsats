@@ -29,7 +29,7 @@ get_tagged_fish <- function(important_fields = NULL) {
   })
 
   # Stop if info retrieval failed
-  if (is.null(info)) return(invisible(NULL))
+  if (is.null(info)) return(data.frame())
 
   # Get the list of fields if provided
   fields <- NULL
@@ -48,7 +48,7 @@ get_tagged_fish <- function(important_fields = NULL) {
   })
 
   # Stop if data retrieval failed
-  if (is.null(fish)) return(invisible(NULL))
+  if (is.null(fish)) return(data.frame())
 
   # Process the data
   fish <- dplyr::distinct(fish)

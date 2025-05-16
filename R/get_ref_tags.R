@@ -22,7 +22,7 @@ get_reference_tags <- function() {
     return(NULL)
   })
 
-  if (is.null(reference_tags)) return(invisible(NULL))
+  if (is.null(reference_tags)) return(data.frame())
 
   reference_tags <- dplyr::distinct(reference_tags, receiver_beacon_id_hex)
   reference_tags$receiver_beacon_id_hex

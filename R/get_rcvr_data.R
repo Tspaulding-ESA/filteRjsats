@@ -27,7 +27,7 @@ get_rcvr_data <- function(fields = rcvr_fields) {
     return(NULL)
   })
 
-  if (is.null(info)) return(invisible(NULL))
+  if (is.null(info)) return(NULL)
 
   # Safely resolve fields
   if (!is.null(fields)) {
@@ -51,7 +51,7 @@ get_rcvr_data <- function(fields = rcvr_fields) {
     return(NULL)
   })
 
-  if (is.null(unique_receivers)) return(invisible(NULL))
+  if (is.null(unique_receivers)) return(data.frame())
 
   # Begin processing
   unique_receiver <- dplyr::distinct(.data = unique_receivers)
