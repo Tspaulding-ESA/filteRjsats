@@ -20,7 +20,7 @@ get_rcvr_data <- function(fields = rcvr_fields){
   info <- rerddap::info('FED_JSATS_receivers',
                         url = 'https://oceanview.pfeg.noaa.gov/erddap')
   if(!is.null(fields))
-  {fields <- rcvr_fields}
+  {fields <- info$variables$variable_name[rcvr_fields]}
   else {fields = NULL}
 
   unique_receivers <- rerddap::tabledap('FED_JSATS_receivers',
