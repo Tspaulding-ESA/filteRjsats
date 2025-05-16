@@ -10,8 +10,16 @@
 #' @examples
 #' # View a list of available receiver fields
 #' get_rcvr_fields()
-get_rcvr_fields <- function(){
-  info <- rerddap::info('FED_JSATS_receivers',
-                        url = 'https://oceanview.pfeg.noaa.gov/erddap')
+get_rcvr_fields <- function() {
+  info <- tryCatch({
+    rerddap::info('FED_JSATS_receivers',
+                  url = 'https://oceanview.pfeg.noaa.gov/erddap')
+  }, error = function(e) {
+    message("⚠️ Unable to access ERDDAP or retrieve receiver fields. Error: ", e$message)
+    return(NULL)
+  })
+
+  if (is.null(info)) return(invisible(NULL))
+
   info$variables
 }

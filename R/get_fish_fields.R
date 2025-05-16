@@ -9,8 +9,16 @@
 #' @export
 #' @examples
 #' fish_fields <- get_fish_fields
-get_fish_fields <- function(){
-  info <- rerddap::info('FED_JSATS_taggedfish',
-                        url = 'https://oceanview.pfeg.noaa.gov/erddap')
+get_fish_fields <- function() {
+  info <- tryCatch({
+    rerddap::info('FED_JSATS_taggedfish',
+                  url = 'https://oceanview.pfeg.noaa.gov/erddap')
+  }, error = function(e) {
+    message("⚠️ Unable to access ERDDAP server or retrieve dataset information. Error message: ", e$message)
+    return(NULL)
+  })
+
+  if (is.null(info)) return(invisible(NULL))
+
   info$variables
 }
