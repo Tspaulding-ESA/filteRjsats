@@ -16,31 +16,57 @@
 #'fields <- c(7,8,16)
 #'try(cal_fish_lite <- get_tagged_fish(important_fields = fields))
 #'options(timeout = tout)
-get_tagged_fish <- function(important_fields = NULL){
+get_tagged_fish <- function(important_fields = NULL) {
   rerddap::cache_delete_all()
-  info <- rerddap::info('FED_JSATS_taggedfish',
-                        url = 'https://oceanview.pfeg.noaa.gov/erddap')
-  if(!is.null(important_fields))
-  {fields <- info$variables$variable_name[important_fields]}
-  else {fields = NULL}
 
-  fish <- rerddap::tabledap('FED_JSATS_taggedfish',
-                            url = "https://oceanview.pfeg.noaa.gov/erddap/",
-                            fields = fields)
+  # Attempt to retrieve dataset info
+  info <- tryCatch({
+    rerddap::info('FED_JSATS_taggedfish',
+                  url = 'https://oceanview.pfeg.noaa.gov/erddap')
+  }, error = function(e) {
+    message("⚠️ Unable to access ERDDAP server or retrieve dataset info. Please check your internet connection or ERDDAP availability.")
+    return(NULL)
+  })
+
+  # Stop if info retrieval failed
+  if (is.null(info)) return(invisible(NULL))
+
+  # Get the list of fields if provided
+  fields <- NULL
+  if (!is.null(important_fields)) {
+    fields <- info$variables$variable_name[important_fields]
+  }
+
+  # Attempt to retrieve the data
+  fish <- tryCatch({
+    rerddap::tabledap('FED_JSATS_taggedfish',
+                      url = "https://oceanview.pfeg.noaa.gov/erddap/",
+                      fields = fields)
+  }, error = function(e) {
+    message("⚠️ Failed to download data from ERDDAP. Error message: ", e$message)
+    return(NULL)
+  })
+
+  # Stop if data retrieval failed
+  if (is.null(fish)) return(invisible(NULL))
+
+  # Process the data
   fish <- dplyr::distinct(fish)
-  if(!is.null(fish$tag_id_hex)) fish$Tag_Hex = as.character(fish$tag_id_hex)
-  if(!is.null(fish$fish_release_date))
-    fish$fish_release_date = lubridate::mdy_hms(fish$fish_release_date,
-                                                tz = "Etc/GMT+8")
-  if(!is.null(fish$release_river_km))
-    fish$release_rkm = as.numeric(fish$release_river_km)
-  if(!is.null(fish$tag_warranty_life))
-    fish$tag_life = lubridate::days(as.integer(fish$tag_warranty_life))
-  if(!is.null(fish$fish_length)) fish$length = as.numeric(fish$fish_length)
-  if(!is.null(fish$fish_weight)) fish$weight = as.numeric(fish$fish_weight)
-  if(!is.null(fish$release_latitude))
-    fish$release_latitude = as.numeric(fish$release_latitude)
-  if(!is.null(fish$release_longitude))
-    fish$release_longitude = as.numeric(fish$release_longitude)
+  if (!is.null(fish$tag_id_hex)) fish$Tag_Hex <- as.character(fish$tag_id_hex)
+  if (!is.null(fish$fish_release_date)) {
+    fish$fish_release_date <- lubridate::mdy_hms(fish$fish_release_date,
+                                                 tz = "Etc/GMT+8")
+  }
+  if (!is.null(fish$release_river_km)) {
+    fish$release_rkm <- as.numeric(fish$release_river_km)
+  }
+  if (!is.null(fish$tag_warranty_life)) {
+    fish$tag_life <- lubridate::days(as.integer(fish$tag_warranty_life))
+  }
+  if (!is.null(fish$fish_length)) fish$length <- as.numeric(fish$fish_length)
+  if (!is.null(fish$fish_weight)) fish$weight <- as.numeric(fish$fish_weight)
+  if (!is.null(fish$release_latitude)) fish$release_latitude <- as.numeric(fish$release_latitude)
+  if (!is.null(fish$release_longitude)) fish$release_longitude <- as.numeric(fish$release_longitude)
+
   as.data.frame(fish)
 }
