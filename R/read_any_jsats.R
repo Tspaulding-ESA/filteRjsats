@@ -8,6 +8,7 @@
 #' @param path the path to the folder containing the desired file
 #' @param file the path of the desired file
 #' @param timezone the Olsen Named time zone, default is "America/Los_Angeles"
+#' @param sensor Logical, does the tag have an environmental sensor? default is FALSE
 #' @returns A dataframe converting the raw detection data into rows of detections
 #' @export
 #' @examples
@@ -24,15 +25,22 @@
 #' timezone = "America/Los_Angeles")
 #' }
 #' # Warnings are expected due to the formatting of ATS files
-read_jsats <- function(path, file, timezone="America/Los_Angeles"){
+read_jsats <- function(path, file, sensor = FALSE,
+                       timezone="America/Los_Angeles"){
   # file_name <- stringr::str_split(file, pattern = '\\.')[[1]][1]
-  file_type <- ifelse(stringr::str_detect(file,'L'),
-                      "Lotek",
+  file_type <- ifelse(stringr::str_detect(file,'.JST'),
+                      "Lotek_v2",
                       ifelse(stringr::str_detect(file,'.SUM'),
                              "Teknologic",
-                             "ATS"))
+                             ifelse(stringr::str_detect(file,'L'),
+                                    "Lotek",
+                                    "ATS")
+                             )
+                      )
   jsats_file <- data.frame()
   if(file_type == "Lotek") jsats_file <- read_lotek(path, file, timezone)
+  if(file_type == "Lotek_v2") jsats_file <- read_lotek_v2(path, file, sensor,
+                                                          timezone)
   if(file_type == "Teknologic") jsats_file <- read_tekno(path, file,
                                                          timezone)
   if(file_type == "ATS") jsats_file <- read_ats(path, file, timezone)
