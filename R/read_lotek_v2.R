@@ -24,6 +24,13 @@ read_lotek_v2 <- function(path, file, sensor = FALSE,
   ReceiverSN <- ReceiverSN[1,2]
   ReceiverSN <- trimws(ReceiverSN)
 
+  # find the end of the file
+  file_end <- read.delim(file.path(path,file),
+                           skip = 45,
+                           sep = ":",
+                           header = FALSE)
+  file_end <- which(grepl("Receiver Sensor Messages",file_end$V1))-1
+
   #Format changed from V1
   if(sensor == TRUE){
   LOT = read.delim(file.path(path,file),
@@ -37,7 +44,8 @@ read_lotek_v2 <- function(path, file, sensor = FALSE,
                                   numeric()),
                    col.names = c("Date","Time_Local","FS","Tag_Decimal",
                                  "Tag Type","Sensor","P"),
-                   skip = 45)
+                   skip = 45,
+                   nrows = file_end)
   } else {
     LOT = read.delim(file.path(path,file),
                      sep = "",
@@ -49,7 +57,8 @@ read_lotek_v2 <- function(path, file, sensor = FALSE,
                                     numeric()),
                      col.names = c("Date","Time_Local","FS","Tag_Decimal",
                                    "Tag Type","P"),
-                     skip = 45)
+                     skip = 45,
+                     nrows = file_end)
                    }
 
   LOT$ReceiverSN <- as.numeric(gsub("WHS4K-","",ReceiverSN)) #Turn the file name into serial
