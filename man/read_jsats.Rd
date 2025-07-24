@@ -4,12 +4,14 @@
 \alias{read_jsats}
 \title{Read an Acoustic Receiver File}
 \usage{
-read_jsats(path, file, timezone = "America/Los_Angeles")
+read_jsats(path, file, sensor = FALSE, timezone = "America/Los_Angeles")
 }
 \arguments{
 \item{path}{the path to the folder containing the desired file}
 
 \item{file}{the path of the desired file}
+
+\item{sensor}{Logical, does the tag have an environmental sensor? default is FALSE}
 
 \item{timezone}{the Olsen Named time zone, default is "America/Los_Angeles"}
 }
