@@ -35,6 +35,7 @@ read_tekno <- function(path, file, timezone="America/Los_Angeles"){
   TEK$Thres = TEK$Thresh
   TEK$SigStr = TEK$snr
   TEK$Make = rep("Tekno", length(TEK$DateTime_Local))
+  TEK$Tag_Hex = stringr::str_to_upper(TEK$Tag_Hex)
   TEK <- dplyr::select(.data =  TEK, ReceiverSN, Make, DateTime_Local,
                        Tag_Decimal, Tag_Hex, Volt, SigStr, Freq, Thres)
   TEK

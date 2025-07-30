@@ -13,6 +13,67 @@
 #' # see read_ats or read_tekno for example usage
 #'
 read_lotek <- function(path, file, timezone="America/Los_Angeles"){
+  #Some Lotek Files have a superheader, find out if this one does
+  superheader = any(grepl("Superheader Section", readLines(con = file.path(path,file),
+                        n = 10)))
+
+  if(superheader){
+    #Serial number has to be retrieved from inside file
+    ReceiverSN <- read.delim(file.path(path,file),
+                             skip = 18,
+                             nrows = 1,
+                             sep = ":",
+                             header = FALSE)
+    ReceiverSN <- ReceiverSN[1,2]
+    ReceiverSN <- trimws(ReceiverSN)
+    ReceiverSN <- gsub("WHS4K-","",ReceiverSN)
+
+    # find the start and end of the detections
+    tmp <- read.delim(file.path(path,file),
+                           sep = ":",
+                           header = FALSE)
+    file_start <- which(grepl("Tag Records", tmp$V1))+3
+    file_end <- which(grepl("Receiver Sensor Messages", tmp$V1))-1
+
+    # Retrieve the headers:
+    headers <- readLines(file.path(path,file),
+               n = file_start + 6)
+    headers <- headers[length(headers)]
+    headers <- strsplit(headers, " {2,}(?![^\\[]*\\])", perl = TRUE)[[1]]
+
+    # now read in with the appropriate headers
+    LOT = read.delim(file.path(path,file),
+                     sep = "",
+                     na.strings = "",
+                     strip.white = TRUE,
+                     col.names = headers,
+                     skip = file_start+7,
+                     nrows = file_end)
+
+    LOT$Power = ifelse(is.na(LOT$Power), LOT$Sensor, LOT$Power)
+    LOT$Sensor = ifelse(LOT$Power == LOT$Sensor, NA, LOT$Sensor)
+    LOT$ReceiverSN = ReceiverSN
+    LOT$Date = as.Date(LOT$Date,
+                       tryFormats = c("%m/%d/%y",
+                                      "%m/%d/%Y",
+                                      "%Y-%m-%d"))
+    LOT$DateTime_Local = lubridate::ymd_hms(paste(LOT$Date,LOT$Time, sep = " "),
+                                 tz = timezone)
+    LOT$FS = lubridate::seconds(LOT$TOA)
+    LOT$DateTime_Local = LOT$DateTime_Local+LOT$FS
+    LOT$Filename = stringr::str_split(file, pattern = '\\.')[[1]][1]
+    LOT$Make = "Lotek"
+    if(any(grepl("Tag ID[hex]",headers))){
+      LOT$Tag_Hex = LOT$Tag.ID.hex.
+    } else {
+      LOT$Tag_Hex = broman::convert2hex(as.integer(LOT$Tag.ID.dec.))
+    }
+    LOT$Tag_Hex <- stringr::str_to_upper(LOT$Tag_Hex)
+
+    LOT <- dplyr::select(.data =  LOT, ReceiverSN, Make, DateTime_Local, Tag_Hex)
+
+    LOT
+  } else {
   LOT = read.csv(file.path(path,file),
                  colClasses = c(character(),
                                 numeric(),
@@ -29,7 +90,9 @@ read_lotek <- function(path, file, timezone="America/Los_Angeles"){
   LOT$DateTime_Local = LOT$DateTime_Local+LOT$FS #Add them together
   LOT$Filename = stringr::str_split(file, pattern = '\\.')[[1]][1]
   LOT$Make = rep("Lotek", length(LOT$DateTime_Local))
+  LOT$Tag_Hex <- stringr::str_to_upper(LOT$Tag_Hex)
   LOT <- dplyr::select(.data =  LOT, ReceiverSN, Make, DateTime_Local,
                        Tag_Decimal, Tag_Hex)
   LOT
+  }
 }

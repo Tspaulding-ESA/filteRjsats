@@ -54,6 +54,7 @@ read_ats <- function(path, file, timezone="America/Los_Angeles"){
   ReceiverSN <- stringr::str_split(ReceiverSN,pattern = '_')[[1]][1]
   ATS$ReceiverSN <- rep(ReceiverSN, length(ATS$DateTime_Local))
   ATS$Make <- rep("ATS", length(ATS$DateTime_Local))
+  ATS$Tag_Hex <- stringr::str_to_upper("ATS$Tag_Hex")
   ATS <- dplyr::select(.data =  ATS, ReceiverSN, Make, DateTime_Local,
                        Tag_Decimal, Tag_Hex, Tilt, Volt, Temp, SigStr, Freq,
                        Thres)
