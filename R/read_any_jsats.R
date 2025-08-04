@@ -28,19 +28,16 @@
 read_jsats <- function(path, file, sensor = FALSE,
                        timezone="America/Los_Angeles"){
   # file_name <- stringr::str_split(file, pattern = '\\.')[[1]][1]
-  file_type <- ifelse(stringr::str_detect(file,'.JST'),
-                      "Lotek_v2",
-                      ifelse(stringr::str_detect(file,'.SUM'),
+  file_type <- ifelse(stringr::str_detect(file,'.SUM'),
                              "Teknologic",
-                             ifelse(stringr::str_detect(file,'L'),
+                             ifelse(stringr::str_detect(file,'WHS'),
                                     "Lotek",
-                                    "ATS")
-                             )
-                      )
+                                    ifelse(grepl(".csv", file,
+                                                 ignore.case = TRUE),
+                                           "ATS", NA))
+  )
   jsats_file <- data.frame()
   if(file_type == "Lotek") jsats_file <- read_lotek(path, file, timezone)
-  if(file_type == "Lotek_v2") jsats_file <- read_lotek_v2(path, file, sensor,
-                                                          timezone)
   if(file_type == "Teknologic") jsats_file <- read_tekno(path, file,
                                                          timezone)
   if(file_type == "ATS") jsats_file <- read_ats(path, file, timezone)
