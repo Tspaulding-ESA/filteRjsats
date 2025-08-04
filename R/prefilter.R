@@ -38,7 +38,7 @@ prefilter <- function(jsats_file, reference_tags){
   temp$time_diff_lag = difftime(temp$DateTime_Local, dplyr::lag(temp$DateTime_Local),
                                 units = "secs")
   temp$time_diff_lag = ifelse(temp$Tag_Hex != dplyr::lag(temp$Tag_Hex),NA,temp$time_diff_lag)
-  temp$RefTag = ifelse(temp$Tag_Decimal %in% reference_tags, TRUE, FALSE) #Is it a ref tag?
+  temp$RefTag = ifelse(temp$Tag_Hex %in% reference_tags, TRUE, FALSE) #Is it a ref tag?
   temp$CheckMBP = ifelse(temp$RefTag == TRUE, # If a ref tag,
                          (temp$time_diff_lag < lubridate::seconds(3*64)), # 2 hits in 3*Max PRI
                          (temp$time_diff_lag < lubridate::seconds(12*10))) # 2 hits in 12*Max PRI
