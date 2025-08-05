@@ -10,7 +10,10 @@ second_filter_2h4h(fish_file)
 \item{fish_file}{a dataframe of detections retrieved from add_fish()}
 }
 \value{
-A dataframe which has been filtered to remove false positives
+A dataframe which has been filtered to flag false positives aka
+spurious detections. These are retained in the dataframe in a new logical
+column \code{spurious} with the value of TRUE. Real detections have a FALSE value
+in the spurious column.
 }
 \description{
 This function takes any acoustic receiver detection dataframe generated from
