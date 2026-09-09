@@ -8,60 +8,195 @@
 #' dataframes are standardized so that all detection dataframes from any
 #' technology type are identical and superfluous fields are removed.
 #'
-#' @param jsats_file A dataframe which is the output from read_jstats() or
+#' @param jsats_file A dataframe which is the output from read_jsats() or
 #' format_detects()
 #' @param reference_tags A vector of potential reference (beacon) tag IDs
 #' @returns A standardized detection dataframe with multipath detects removed
 #' @export
-#' @examples
-#' # Filter a raw detection dataset
-#' prefilter(raw_ats, reftags)
 prefilter <- function(jsats_file, reference_tags){
+
   temp <- jsats_file
-  temp <- dplyr::arrange(.data = temp,Tag_Hex)
-  temp <- dplyr::group_by(.data = temp, Tag_Hex)
-  temp <- dplyr::arrange(.data = temp, Tag_Hex, DateTime_Local)
-  det_count <- dplyr::summarise(temp, det_count = dplyr::n())
-  temp <- dplyr::left_join(temp, det_count, by = "Tag_Hex")
-  temp <- temp[temp$det_count > 1,]
-  temp$time_diff_lag = difftime(temp$DateTime_Local, dplyr::lag(temp$DateTime_Local),
-                                units = "secs")
-  temp$multipath = ifelse(temp$time_diff_lag > lubridate::seconds(0.3)|
-                            temp$Tag_Hex != dplyr::lag(temp$Tag_Hex), FALSE, TRUE)
-  temp$multipath = ifelse(is.na(temp$time_diff_lag) &
-                            dplyr::lead(temp$multipath) == FALSE,
-                          FALSE,
-                          ifelse(is.na(temp$time_diff_lag),
-                                 TRUE,
-                                 temp$multipath))
-  temp <- temp[temp$multipath == FALSE,] # filter out Multipath
-  temp$time_diff_lag = difftime(temp$DateTime_Local, dplyr::lag(temp$DateTime_Local),
-                                units = "secs")
-  temp$time_diff_lag = ifelse(temp$Tag_Hex != dplyr::lag(temp$Tag_Hex),NA,temp$time_diff_lag)
-  temp$RefTag = ifelse(temp$Tag_Hex %in% reference_tags, TRUE, FALSE) #Is it a ref tag?
-  temp$CheckMBP = ifelse(temp$RefTag == TRUE, # If a ref tag,
-                         (temp$time_diff_lag < lubridate::seconds(3*64)), # 2 hits in 3*Max PRI
-                         (temp$time_diff_lag < lubridate::seconds(12*10))) # 2 hits in 12*Max PRI
-  temp$CheckMBP = ifelse(is.na(temp$time_diff_lag) & dplyr::lead(temp$CheckMBP) == FALSE, #First Detection is FALSE if 2nd is FALSE
-                         FALSE,
-                         ifelse(is.na(temp$time_diff_lag),
-                                TRUE,
-                                temp$CheckMBP)) #Otherwise it's valid
-  temp$CheckMBP = ifelse(temp$CheckMBP == FALSE & !is.na(dplyr::lead(temp$time_diff_lag)) &
-                           dplyr::lead(temp$time_diff_lag) < lubridate::seconds(12*10), #If invalid based on last detection, but following detection is <120s
-                         TRUE, #Valid
-                         temp$CheckMBP) #Return Previous Assignment
-  temp <- temp[temp$CheckMBP == TRUE,]
-  temp <- dplyr::select(.data =  temp,
-                        -c(`det_count`))
-  det_count <- dplyr::summarise(temp, det_count = dplyr::n())
-  temp <- dplyr::left_join(temp, `det_count`, by = "Tag_Hex")
-  temp <- temp[temp$det_count > 1,]
+
+  # Arrange and group by tag
+  temp <- dplyr::arrange(
+    .data = temp,
+    Tag_Hex,
+    DateTime_Local
+  )
+
+  temp <- dplyr::group_by(
+    .data = temp,
+    Tag_Hex
+  )
+
+  # Count detections per tag
+  det_count <- dplyr::summarise(
+    .data = temp,
+    det_count = dplyr::n(),
+    .groups = "drop"
+  )
+
+  temp <- dplyr::left_join(
+    temp,
+    det_count,
+    by = "Tag_Hex"
+  )
+
+  # Require at least two detections
+  temp <- temp[temp$det_count > 1, ]
+
+  # Re-establish grouping after join/subset
+  temp <- dplyr::group_by(
+    .data = temp,
+    Tag_Hex
+  )
+
+  temp <- dplyr::arrange(
+    .data = temp,
+    Tag_Hex,
+    DateTime_Local
+  )
+
+  # Calculate time difference within each tag
+  temp <- dplyr::mutate(
+    .data = temp,
+
+    time_diff_lag = difftime(
+      DateTime_Local,
+      dplyr::lag(DateTime_Local),
+      units = "secs"
+    ),
+
+    multipath = ifelse(
+      time_diff_lag > lubridate::seconds(0.3),
+      FALSE,
+      TRUE
+    ),
+
+    # For the first detection of a tag:
+    # if the next detection is not multipath, retain the first detection;
+    # otherwise flag the first detection as part of the multipath sequence.
+    multipath = ifelse(
+      is.na(time_diff_lag) &
+        dplyr::lead(multipath, default = FALSE) == FALSE,
+      FALSE,
+      ifelse(
+        is.na(time_diff_lag),
+        TRUE,
+        multipath
+      )
+    )
+  )
+
+  # Remove multipath
+  temp <- temp[temp$multipath == FALSE, ]
+
+  # Re-group after filtering and recalculate time difference
+  temp <- dplyr::group_by(
+    .data = temp,
+    Tag_Hex
+  )
+
+  temp <- dplyr::arrange(
+    .data = temp,
+    Tag_Hex,
+    DateTime_Local
+  )
+
+  temp <- dplyr::mutate(
+    .data = temp,
+
+    time_diff_lag = difftime(
+      DateTime_Local,
+      dplyr::lag(DateTime_Local),
+      units = "secs"
+    ),
+
+    RefTag = ifelse(
+      Tag_Hex %in% reference_tags,
+      TRUE,
+      FALSE
+    ),
+
+    # Beacon tags: two detections within 192 sec
+    # Fish tags: two detections within 120 sec
+    CheckMBP = ifelse(
+      RefTag == TRUE,
+      time_diff_lag < lubridate::seconds(3 * 64),
+      time_diff_lag < lubridate::seconds(12 * 10)
+    ),
+
+    # First detection takes validity from its following interval
+    CheckMBP = ifelse(
+      is.na(time_diff_lag) &
+        dplyr::lead(CheckMBP, default = FALSE) == FALSE,
+      FALSE,
+      ifelse(
+        is.na(time_diff_lag),
+        TRUE,
+        CheckMBP
+      )
+    ),
+
+    # If invalid relative to the previous detection but the next
+    # detection occurs within 120 sec, retain the current detection
+    CheckMBP = ifelse(
+      CheckMBP == FALSE &
+        !is.na(dplyr::lead(time_diff_lag)) &
+        dplyr::lead(time_diff_lag) < lubridate::seconds(12 * 10),
+      TRUE,
+      CheckMBP
+    )
+  )
+
+  temp <- temp[temp$CheckMBP == TRUE, ]
+
+  # Remove old detection count and recalculate after filtering
+  temp <- dplyr::select(
+    .data = temp,
+    -det_count
+  )
+
+  temp <- dplyr::group_by(
+    .data = temp,
+    Tag_Hex
+  )
+
+  det_count <- dplyr::summarise(
+    .data = temp,
+    det_count = dplyr::n(),
+    .groups = "drop"
+  )
+
+  temp <- dplyr::left_join(
+    temp,
+    det_count,
+    by = "Tag_Hex"
+  )
+
+  # Require at least two surviving detections
+  temp <- temp[temp$det_count > 1, ]
+
   temp <- dplyr::ungroup(temp)
-  temp <- dplyr::select(.data =  temp,
-                        -c(time_diff_lag,multipath,RefTag,`det_count`))
-  temp <- dplyr::arrange(.data = temp, `ReceiverSN`, `Tag_Hex`, `DateTime_Local`)
-  temp <- temp[!is.na(temp$DateTime_Local),]
+
+  temp <- dplyr::select(
+    .data = temp,
+    -time_diff_lag,
+    -multipath,
+    -RefTag,
+    -det_count
+  )
+
+  temp <- dplyr::arrange(
+    .data = temp,
+    ReceiverSN,
+    Tag_Hex,
+    DateTime_Local
+  )
+
+  temp <- temp[!is.na(temp$DateTime_Local), ]
+
   prefilter_file <- temp
+
   prefilter_file
 }

@@ -17,47 +17,204 @@
 #' # attributes
 #' second_filter_lotek(filter_fish_detects)
 second_filter_lotek <- function(fish_file){
-  filtered <- fish_file
-  filtered <- dplyr::group_by(.data = filtered, Tag_Hex)
-  filtered <- dplyr::arrange(.data = filtered, Tag_Hex, DateTime_Local)
-  filtered$td = difftime(filtered$DateTime_Local,
-                         dplyr::lag(filtered$DateTime_Local), #compare the time difference between each hit
-                         units = "secs")
-  det_count <- dplyr::summarise(filtered, det_count = dplyr::n())
-  filtered <- dplyr::left_join(filtered, det_count, by = "Tag_Hex")
-  filtered$multipath <- ifelse(filtered$td > 0.3 | is.na(filtered$td), FALSE, TRUE) #identify any remaining multipath
-  filtered$multipath <- ifelse(filtered$multipath == TRUE &
-                                 dplyr::lead(filtered$multipath == FALSE),
-                               FALSE,
-                               filtered$multipath)
-  filtered <- filtered[filtered$det_count > 3 & filtered$multipath == FALSE,] #first filter out any final multipath and any tags with <3 detects
-  filtered$td = difftime(filtered$DateTime_Local,
-                         dplyr::lag(filtered$DateTime_Local), # recalculate time diff
-                         units = "secs")
-  # Calculating for every 4 hits
-  filtered$tdiff <- as.numeric(filtered$td)/round(as.numeric(filtered$td)/as.numeric(filtered$tag_pulse_rate_interval_nominal))
-  filtered$tdiff <- ifelse(is.infinite(filtered$tdiff),NA,filtered$tdiff)
-  filtered$tdiff <- round(filtered$tdiff*100)/100
-  filtered$tdiff <- ifelse(is.na(filtered$tdiff),dplyr::lead(filtered$tdiff),filtered$tdiff)
-  filtered$cs <- difftime(dplyr::lead(filtered$DateTime_Local,3),
-                          filtered$DateTime_Local,
-                          units = "secs")
-  filtered$pr <- as.numeric(filtered$tag_pulse_rate_interval_nominal)
-  filtered <- filtered[filtered$cs < filtered$pr*16.6 | is.na(filtered$cs),]
 
-  filtered$v1 = abs(filtered$pr-filtered$tdiff) < filtered$pr*0.20
-  filtered$v2 = abs(filtered$pr-dplyr::lead(filtered$tdiff)) < filtered$pr*0.20
-  filtered$v3 = abs(filtered$pr-dplyr::lead(filtered$tdiff,2)) < filtered$pr*0.20
-  filtered$sd_roll_check = rolling_sd_3(as.numeric(filtered$pr)) < 0.025
-  filtered$sd_roll_check = ifelse(is.na(filtered$sd_roll_check),
-                                  TRUE,
-                                  filtered$sd_roll_check)
-  filtered <- filtered[filtered$v1 == TRUE &
-                         filtered$v2 == TRUE &
-                         filtered$v3 == TRUE &
-                         filtered$sd_roll_check == TRUE,]
-  filtered <- dplyr::select(filtered, -c(det_count))
-  det_count <- dplyr::summarise(filtered, det_count = dplyr::n())
-  filtered <- dplyr::left_join(filtered, det_count, by = "Tag_Hex")
+  filtered <- fish_file
+
+  filtered <- dplyr::group_by(
+    .data = filtered,
+    Tag_Hex
+  )
+
+  filtered <- dplyr::arrange(
+    .data = filtered,
+    Tag_Hex,
+    DateTime_Local
+  )
+
+  # Initial detection intervals
+  filtered <- dplyr::mutate(
+    .data = filtered,
+
+    td = difftime(
+      DateTime_Local,
+      dplyr::lag(DateTime_Local),
+      units = "secs"
+    )
+  )
+
+  # Count detections
+  det_count <- dplyr::summarise(
+    .data = filtered,
+    det_count = dplyr::n(),
+    .groups = "drop"
+  )
+
+  filtered <- dplyr::left_join(
+    filtered,
+    det_count,
+    by = "Tag_Hex"
+  )
+
+  filtered <- dplyr::group_by(
+    .data = filtered,
+    Tag_Hex
+  )
+
+  # Remaining multipath
+  filtered <- dplyr::mutate(
+    .data = filtered,
+
+    multipath = ifelse(
+      td > 0.3 | is.na(td),
+      FALSE,
+      TRUE
+    ),
+
+    multipath = ifelse(
+      multipath == TRUE &
+        dplyr::lead(
+          multipath == FALSE,
+          default = FALSE
+        ),
+      FALSE,
+      multipath
+    )
+  )
+
+  # Four-hit requirement
+  filtered <- filtered[
+    filtered$det_count > 3 &
+      filtered$multipath == FALSE,
+  ]
+
+  # Recalculate intervals
+  filtered <- dplyr::group_by(
+    .data = filtered,
+    Tag_Hex
+  )
+
+  filtered <- dplyr::arrange(
+    .data = filtered,
+    Tag_Hex,
+    DateTime_Local
+  )
+
+  filtered <- dplyr::mutate(
+    .data = filtered,
+
+    td = difftime(
+      DateTime_Local,
+      dplyr::lag(DateTime_Local),
+      units = "secs"
+    ),
+
+    tdiff = as.numeric(td) /
+      round(
+        as.numeric(td) /
+          as.numeric(tag_pulse_rate_interval_nominal)
+      ),
+
+    tdiff = ifelse(
+      is.infinite(tdiff),
+      NA_real_,
+      tdiff
+    ),
+
+    tdiff = round(tdiff * 100) / 100,
+
+    tdiff = ifelse(
+      is.na(tdiff),
+      dplyr::lead(tdiff),
+      tdiff
+    ),
+
+    # Time across a four-detection window
+    cs = difftime(
+      dplyr::lead(DateTime_Local, 3),
+      DateTime_Local,
+      units = "secs"
+    ),
+
+    pr = as.numeric(
+      tag_pulse_rate_interval_nominal
+    )
+  )
+
+  # Four detections must occur within 16.6 nominal PRIs
+  filtered <- filtered[
+    filtered$cs < filtered$pr * 16.6 |
+      is.na(filtered$cs),
+  ]
+
+  # Re-group because following rolling checks must remain within tag
+  filtered <- dplyr::group_by(
+    .data = filtered,
+    Tag_Hex
+  )
+
+  filtered <- dplyr::arrange(
+    .data = filtered,
+    Tag_Hex,
+    DateTime_Local
+  )
+
+  filtered <- dplyr::mutate(
+    .data = filtered,
+
+    v1 = abs(
+      pr - tdiff
+    ) < pr * 0.20,
+
+    v2 = abs(
+      pr - dplyr::lead(tdiff)
+    ) < pr * 0.20,
+
+    v3 = abs(
+      pr - dplyr::lead(tdiff, 2)
+    ) < pr * 0.20,
+
+    # rolling_sd_3 now receives only the current Tag_Hex group
+    sd_roll_check =
+      rolling_sd_3(as.numeric(pr)) < 0.025,
+
+    sd_roll_check = ifelse(
+      is.na(sd_roll_check),
+      TRUE,
+      sd_roll_check
+    )
+  )
+
+  filtered <- filtered[
+    filtered$v1 == TRUE &
+      filtered$v2 == TRUE &
+      filtered$v3 == TRUE &
+      filtered$sd_roll_check == TRUE,
+  ]
+
+  # Recalculate surviving detection count
+  filtered <- dplyr::select(
+    .data = filtered,
+    -det_count
+  )
+
+  filtered <- dplyr::group_by(
+    .data = filtered,
+    Tag_Hex
+  )
+
+  det_count <- dplyr::summarise(
+    .data = filtered,
+    det_count = dplyr::n(),
+    .groups = "drop"
+  )
+
+  filtered <- dplyr::left_join(
+    filtered,
+    det_count,
+    by = "Tag_Hex"
+  )
+
+  filtered <- dplyr::ungroup(filtered)
+
   filtered
 }
