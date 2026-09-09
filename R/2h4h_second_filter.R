@@ -37,7 +37,7 @@ second_filter_2h4h <- function(fish_file){
     spur$spurious <- TRUE
     final_file$spurious <- FALSE
 
-    final_file <- bind_rows(final_file, spur)
+    final_file <- dplyr::bind_rows(final_file, spur)
     final_file <- dplyr::arrange(final_file, Tag_Hex, DateTime_Local)
 
     final_file

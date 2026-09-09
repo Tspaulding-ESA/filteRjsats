@@ -31,7 +31,6 @@ second_filter_lotek <- function(fish_file){
     DateTime_Local
   )
 
-  # Initial detection intervals
   filtered <- dplyr::mutate(
     .data = filtered,
 
@@ -42,7 +41,6 @@ second_filter_lotek <- function(fish_file){
     )
   )
 
-  # Count detections
   det_count <- dplyr::summarise(
     .data = filtered,
     det_count = dplyr::n(),
@@ -60,15 +58,10 @@ second_filter_lotek <- function(fish_file){
     Tag_Hex
   )
 
-  # Remaining multipath
   filtered <- dplyr::mutate(
     .data = filtered,
 
-    multipath = ifelse(
-      td > 0.3 | is.na(td),
-      FALSE,
-      TRUE
-    ),
+    multipath = !is.na(td) & td <= 0.3,
 
     multipath = ifelse(
       multipath == TRUE &
@@ -81,13 +74,14 @@ second_filter_lotek <- function(fish_file){
     )
   )
 
-  # Four-hit requirement
-  filtered <- filtered[
-    filtered$det_count > 3 &
-      filtered$multipath == FALSE,
-  ]
+  # FOUR-HIT requirement
+  filtered <- dplyr::filter(
+    .data = filtered,
+    det_count > 3,
+    multipath == FALSE
+  )
 
-  # Recalculate intervals
+  # Recalculate after multipath removal
   filtered <- dplyr::group_by(
     .data = filtered,
     Tag_Hex
@@ -120,7 +114,7 @@ second_filter_lotek <- function(fish_file){
       tdiff
     ),
 
-    tdiff = round(tdiff * 100) / 100,
+    tdiff = round(tdiff, 2),
 
     tdiff = ifelse(
       is.na(tdiff),
@@ -128,7 +122,7 @@ second_filter_lotek <- function(fish_file){
       tdiff
     ),
 
-    # Time across a four-detection window
+    # Time spanning four detections
     cs = difftime(
       dplyr::lead(DateTime_Local, 3),
       DateTime_Local,
@@ -137,16 +131,22 @@ second_filter_lotek <- function(fish_file){
 
     pr = as.numeric(
       tag_pulse_rate_interval_nominal
+    ),
+
+    # Last three detections cannot form a forward four-hit
+    # window, so the unavailable check passes.
+    cs_check = dplyr::coalesce(
+      cs < pr * 16.6,
+      TRUE
     )
   )
 
-  # Four detections must occur within 16.6 nominal PRIs
-  filtered <- filtered[
-    filtered$cs < filtered$pr * 16.6 |
-      is.na(filtered$cs),
-  ]
+  filtered <- dplyr::filter(
+    .data = filtered,
+    cs_check == TRUE
+  )
 
-  # Re-group because following rolling checks must remain within tag
+  # Rolling comparisons remain grouped by Tag_Hex
   filtered <- dplyr::group_by(
     .data = filtered,
     Tag_Hex
@@ -161,40 +161,48 @@ second_filter_lotek <- function(fish_file){
   filtered <- dplyr::mutate(
     .data = filtered,
 
-    v1 = abs(
-      pr - tdiff
-    ) < pr * 0.20,
+    v1 = dplyr::coalesce(
+      abs(pr - tdiff) <
+        pr * 0.20,
+      TRUE
+    ),
 
-    v2 = abs(
-      pr - dplyr::lead(tdiff)
-    ) < pr * 0.20,
+    v2 = dplyr::coalesce(
+      abs(
+        pr -
+          dplyr::lead(tdiff)
+      ) < pr * 0.20,
+      TRUE
+    ),
 
-    v3 = abs(
-      pr - dplyr::lead(tdiff, 2)
-    ) < pr * 0.20,
+    v3 = dplyr::coalesce(
+      abs(
+        pr -
+          dplyr::lead(tdiff, 2)
+      ) < pr * 0.20,
+      TRUE
+    ),
 
-    # rolling_sd_3 now receives only the current Tag_Hex group
-    sd_roll_check =
-      rolling_sd_3(as.numeric(pr)) < 0.025,
-
-    sd_roll_check = ifelse(
-      is.na(sd_roll_check),
-      TRUE,
-      sd_roll_check
+    sd_roll_check = dplyr::coalesce(
+      rolling_sd_3(
+        as.numeric(pr)
+      ) < 0.025,
+      TRUE
     )
   )
 
-  filtered <- filtered[
-    filtered$v1 == TRUE &
-      filtered$v2 == TRUE &
-      filtered$v3 == TRUE &
-      filtered$sd_roll_check == TRUE,
-  ]
+  filtered <- dplyr::filter(
+    .data = filtered,
+    v1 == TRUE,
+    v2 == TRUE,
+    v3 == TRUE,
+    sd_roll_check == TRUE
+  )
 
-  # Recalculate surviving detection count
   filtered <- dplyr::select(
     .data = filtered,
-    -det_count
+    -det_count,
+    -cs_check
   )
 
   filtered <- dplyr::group_by(

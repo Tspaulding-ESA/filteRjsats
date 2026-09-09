@@ -36,7 +36,6 @@ second_filter_tekno_4h <- function(fish_file){
     DateTime_Local
   )
 
-  # Initial detection intervals
   filtered <- dplyr::mutate(
     .data = filtered,
 
@@ -47,7 +46,6 @@ second_filter_tekno_4h <- function(fish_file){
     )
   )
 
-  # Detection count
   det_count <- dplyr::summarise(
     .data = filtered,
     det_count = dplyr::n(),
@@ -65,15 +63,10 @@ second_filter_tekno_4h <- function(fish_file){
     Tag_Hex
   )
 
-  # Multipath
   filtered <- dplyr::mutate(
     .data = filtered,
 
-    multipath = ifelse(
-      td > 0.3 | is.na(td),
-      FALSE,
-      TRUE
-    ),
+    multipath = !is.na(td) & td <= 0.3,
 
     multipath = ifelse(
       multipath == TRUE &
@@ -86,11 +79,11 @@ second_filter_tekno_4h <- function(fish_file){
     )
   )
 
-  # Four-hit requirement
-  filtered <- filtered[
-    filtered$det_count > 3 &
-      filtered$multipath == FALSE,
-  ]
+  filtered <- dplyr::filter(
+    .data = filtered,
+    det_count > 3,
+    multipath == FALSE
+  )
 
   # Recalculate td after multipath removal
   filtered <- dplyr::group_by(
@@ -114,13 +107,15 @@ second_filter_tekno_4h <- function(fish_file){
     )
   )
 
-  # Remove short PRIs
-  filtered <- filtered[
-    filtered$td > 0.8 * filtered$pr_nom |
-      is.na(filtered$td),
-  ]
+  filtered <- dplyr::filter(
+    .data = filtered,
+    dplyr::coalesce(
+      td > 0.8 * pr_nom,
+      TRUE
+    )
+  )
 
-  # Recalculate after removal
+  # Recalculate after short-PRI removal
   filtered <- dplyr::group_by(
     .data = filtered,
     Tag_Hex
@@ -153,7 +148,7 @@ second_filter_tekno_4h <- function(fish_file){
       tdiff
     ),
 
-    tdiff = round(tdiff * 100) / 100,
+    tdiff = round(tdiff, 2),
 
     tdiff = ifelse(
       is.na(tdiff),
@@ -161,7 +156,6 @@ second_filter_tekno_4h <- function(fish_file){
       tdiff
     ),
 
-    # Four-hit time window
     cs = difftime(
       dplyr::lead(DateTime_Local, 3),
       DateTime_Local,
@@ -170,15 +164,19 @@ second_filter_tekno_4h <- function(fish_file){
 
     pr = as.numeric(
       tag_pulse_rate_interval_nominal
+    ),
+
+    cs_check = dplyr::coalesce(
+      cs < pr_nom * 16.6,
+      TRUE
     )
   )
 
-  filtered <- filtered[
-    filtered$cs < filtered$pr_nom * 16.6 |
-      is.na(filtered$cs),
-  ]
+  filtered <- dplyr::filter(
+    .data = filtered,
+    cs_check == TRUE
+  )
 
-  # Re-group before rolling calculations
   filtered <- dplyr::group_by(
     .data = filtered,
     Tag_Hex
@@ -193,25 +191,33 @@ second_filter_tekno_4h <- function(fish_file){
   filtered <- dplyr::mutate(
     .data = filtered,
 
-    v1 = abs(
-      pr_nom - tdiff
-    ) < pr_nom * 0.20,
+    v1 = dplyr::coalesce(
+      abs(pr_nom - tdiff) <
+        pr_nom * 0.20,
+      TRUE
+    ),
 
-    v2 = abs(
-      pr_nom - dplyr::lead(tdiff)
-    ) < pr_nom * 0.20,
+    v2 = dplyr::coalesce(
+      abs(
+        pr_nom -
+          dplyr::lead(tdiff)
+      ) < pr_nom * 0.20,
+      TRUE
+    ),
 
-    v3 = abs(
-      pr_nom - dplyr::lead(tdiff, 2)
-    ) < pr_nom * 0.20,
+    v3 = dplyr::coalesce(
+      abs(
+        pr_nom -
+          dplyr::lead(tdiff, 2)
+      ) < pr_nom * 0.20,
+      TRUE
+    ),
 
-    sd_roll_check =
-      rolling_sd_3(as.numeric(pr_nom)) < 0.025,
-
-    sd_roll_check = ifelse(
-      is.na(sd_roll_check),
-      TRUE,
-      sd_roll_check
+    sd_roll_check = dplyr::coalesce(
+      rolling_sd_3(
+        as.numeric(pr_nom)
+      ) < 0.025,
+      TRUE
     ),
 
     FreqDiff = abs(
@@ -219,53 +225,66 @@ second_filter_tekno_4h <- function(fish_file){
         dplyr::lead(Freq)
     ),
 
-    freq_check = ifelse(
-      FreqDiff < 55 |
-        is.na(FreqDiff),
-      TRUE,
-      FALSE
+    freq_check = dplyr::coalesce(
+      FreqDiff < 55,
+      TRUE
     ),
 
-    pr_check = ifelse(
-      td < pr_nom * 4 |
-        is.na(td),
-      TRUE,
-      FALSE
+    pr_check = dplyr::coalesce(
+      td < pr_nom * 4,
+      TRUE
     ),
 
     pr_check = ifelse(
       pr_check == FALSE &
         !is.na(dplyr::lead(td)) &
-        dplyr::lead(td) < pr_nom * 4,
+        dplyr::coalesce(
+          dplyr::lead(td) < pr_nom * 4,
+          FALSE
+        ),
       TRUE,
       pr_check
     )
   )
 
-  filtered <- filtered[
-    filtered$pr_check == TRUE &
-      filtered$freq_check == TRUE &
-      filtered$v1 == TRUE &
-      filtered$v2 == TRUE &
-      filtered$v3 == TRUE &
-      filtered$sd_roll_check == TRUE,
-  ]
+  filtered <- dplyr::filter(
+    .data = filtered,
+    pr_check == TRUE,
+    freq_check == TRUE,
+    v1 == TRUE,
+    v2 == TRUE,
+    v3 == TRUE,
+    sd_roll_check == TRUE
+  )
 
-  # Final Tekno PRI and frequency criteria
-  filtered <- filtered[
-    abs(
-      as.numeric(filtered$pr_nom) -
-        as.numeric(filtered$tdiff)
-    ) <
-      (as.numeric(filtered$pr_nom) * 0.1) &
-      filtered$Freq > 390.00 &
-      filtered$Freq < 445.00,
-  ]
+  filtered <- dplyr::mutate(
+    .data = filtered,
 
-  # Surviving detection count
+    tdiff_check = dplyr::coalesce(
+      abs(pr_nom - tdiff) <
+        pr_nom * 0.1,
+      TRUE
+    ),
+
+    freq_range_check = dplyr::coalesce(
+      Freq > 390.00 &
+        Freq < 445.00,
+      TRUE
+    )
+  )
+
+  filtered <- dplyr::filter(
+    .data = filtered,
+    tdiff_check == TRUE,
+    freq_range_check == TRUE
+  )
+
   filtered <- dplyr::select(
     .data = filtered,
-    -det_count
+    -det_count,
+    -cs_check,
+    -tdiff_check,
+    -freq_range_check
   )
 
   filtered <- dplyr::group_by(
