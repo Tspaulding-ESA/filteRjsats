@@ -32,7 +32,7 @@ second_filter_ats <- function(fish_file){
                                  dplyr::lead(filtered$multipath == FALSE),
                                FALSE,
                                filtered$multipath)
-  filtered <- filtered[filtered$det_count > 3 & filtered$multipath == FALSE,] #first filter out any final multipath and any tags with <3 detects
+  filtered <- filtered[filtered$det_count >=2 & filtered$multipath == FALSE,] #first filter out any final multipath and any tags with <3 detects
   filtered$td = difftime(filtered$DateTime_Local,
                          dplyr::lag(filtered$DateTime_Local), # recalculate time diff
                          units = "secs")
