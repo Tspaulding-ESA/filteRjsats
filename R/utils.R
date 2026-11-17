@@ -1,60 +1,120 @@
-#' Compare two Detection Dataframes
+#' Compare two detection data frames
 #'
-#' This function compares two detection dataframes from filtered acoustic
-#' telemetry detections and identifies the filtered out detections. The first
-#' input is the original dataframe, the second is the filtered dataframe. Then
-#' it creates a dataframe of detections which are missing from the filtered
-#' dataframe.
-#'
-#' @param a1 unfiltered detection dataframe
-#' @param a2 filtered detection dataframe
-#' @return A dataframe of detections from the original dataframe missing from
-#' the filtered dataframe. Spurious detections.
+#' Report each input row missing from a filtered data frame, preserving
+#' duplicate multiplicity. Prefer a stable input-row ID supplied by the
+#' filter dispatcher; fall back to per-key occurrence matching.
+#' @param a1 Original detections.
+#' @param a2 Accepted detections.
+#' @return Removed rows from a1.
 #' @export
-#' @examples
-#' # Compare detections before and after filtering
-#' compare_detects(raw_ats[1:1000,], filter_fish_detects[1:1000,])
-compare_detects  <- function(a1,a2){
-  a3 <- dplyr::select(a1, Tag_Hex, DateTime_Local)
-  a4 <- dplyr::select(a2, Tag_Hex, DateTime_Local)
-  a1.vec <- apply(a3, 1, paste, collapse = "")
-  a2.vec <- apply(a4, 1, paste, collapse = "")
-  a1.without.a2.rows <- a1[!a1.vec %in% a2.vec,]
-  return(a1.without.a2.rows)
+compare_detects <- function(a1, a2) {
+  if (nrow(a1) == 0L) return(a1)
+  if (".detection_row_id" %in% names(a1) &&
+      ".detection_row_id" %in% names(a2)) {
+    return(a1[!(a1$.detection_row_id %in% a2$.detection_row_id), ,
+              drop = FALSE])
+  }
+
+  keys <- intersect(c("ReceiverSN", "Tag_Hex", "DateTime_Local",
+                      "fish_id", "fish_rel_group", "fish_release_date"),
+                    intersect(names(a1), names(a2)))
+  if (!all(c("Tag_Hex", "DateTime_Local") %in% keys)) {
+    stop("Cannot compare detections: required identification fields missing",
+         call. = FALSE)
+  }
+  left <- dplyr::ungroup(a1)
+  right <- dplyr::ungroup(a2)
+  left$.source_row <- seq_len(nrow(left))
+  left <- dplyr::group_by(left, dplyr::across(dplyr::all_of(keys)))
+  left <- dplyr::mutate(left, .instance = dplyr::row_number())
+  right <- dplyr::group_by(right, dplyr::across(dplyr::all_of(keys)))
+  right <- dplyr::mutate(right, .instance = dplyr::row_number())
+  unmatched <- dplyr::anti_join(
+    dplyr::ungroup(left),
+    dplyr::select(dplyr::ungroup(right), dplyr::all_of(keys), .instance),
+    by = c(keys, ".instance")
+  )
+  a1[sort(unmatched$.source_row), , drop = FALSE]
 }
 
-#' Calculate Standard Deviation Over a Rolling Window of 3
-#'
-#' This function is called within the third filter, and used to calculate a
-#' rolling standard deviation with a window including the 2 leading values.
-#'
-#' @param x an indexed position of a value in a vector for which the rolling standard deviation is needed
-#' @returns the standard deviation of x, and the two leading values
+#' Rolling standard deviation of three consecutive observations
+#' @param x Numeric series.
+#' @return Sample SD of each observation and the two following values.
 #' @export
-#' @examples
-#' # Calculate rolling Standard Deviation
-#' set.seed(1234)
-#' x <- rnorm(n = 100, mean = 10, sd = 1)
-#' rolling_sd_3(x)
-rolling_sd_3 <- function(x){
-  mean = (x + dplyr::lead(x) + dplyr::lead(x,2))/3
-  sos = (x-mean)^2+ (dplyr::lead(x)-mean)^2 + (dplyr::lead(x,2)-mean)^2
-  sd = sqrt(sos/2)
-  return(sd)
+rolling_sd_3 <- function(x) {
+  avg <- (x + dplyr::lead(x) + dplyr::lead(x, 2L)) / 3
+  ss <- (x - avg)^2 + (dplyr::lead(x) - avg)^2 +
+    (dplyr::lead(x, 2L) - avg)^2
+  sqrt(ss / 2)
 }
 
-#' Add in Global Variables
-#'
-#' Sets all global variables to remove warnings in package build
-#'
+# Internal dispatcher. An input row always appears exactly once in the result.
+#' @keywords internal
+run_second_filter <- function(fish_file, four_hit = FALSE) {
+  if (nrow(fish_file) == 0L) {
+    message("No detections to evaluate")
+    out <- dplyr::ungroup(fish_file)
+    out$spurious <- logical(0)
+    return(out)
+  }
+  fish_file <- dplyr::ungroup(fish_file)
+  makes <- unique(as.character(fish_file$Make))
+  if (length(makes) != 1L || is.na(makes) ||
+      !(makes %in% c("ATS", "Tekno", "Lotek"))) {
+    stop("Input must contain one receiver technology: ATS, Tekno, or Lotek",
+         call. = FALSE)
+  }
+  if (!".detection_row_id" %in% names(fish_file)) {
+    fish_file$.detection_row_id <- seq_len(nrow(fish_file))
+  }
+  if (anyNA(fish_file$.detection_row_id) ||
+      anyDuplicated(fish_file$.detection_row_id)) {
+    stop(".detection_row_id must be unique and non-missing", call. = FALSE)
+  }
+
+  valid <- switch(
+    makes,
+    ATS = if (four_hit) second_filter_ats_4h(fish_file)
+          else second_filter_ats(fish_file),
+    Tekno = if (four_hit) second_filter_tekno_4h(fish_file)
+            else second_filter_tekno(fish_file),
+    Lotek = second_filter_lotek(fish_file)
+  )
+  spur <- compare_detects(fish_file, valid)
+  valid$spurious <- FALSE
+  spur$spurious <- TRUE
+  out <- dplyr::bind_rows(valid, spur)
+  out <- dplyr::arrange(out, ReceiverSN, Tag_Hex,
+                        DateTime_Local, .detection_row_id)
+  if (nrow(out) != nrow(fish_file) ||
+      anyDuplicated(out$.detection_row_id)) {
+    stop("Filtering lost or duplicated source detection rows", call. = FALSE)
+  }
+  message("Valid tags: ", length(unique(valid$Tag_Hex)),
+          "; valid detections: ", nrow(valid),
+          "; spurious detections: ", nrow(spur))
+  out
+}
+
 #' @name Set_GVs
-utils::globalVariables(c('B2', 'BitPer', 'DateTime_Local', 'Freq', 'Make',
-                         'ReceiverSN','RefTag', 'SigStr', 'Tag_Decimal',
-                         'Tag_Hex', 'Temp', 'Thres','Tilt', 'Volt',
-                         'fish_release_date', 'lines', 'multipath',
-                         'rcvr_fields', 'read.csv', 'read.delim',
-                         'receiver_beacon_id_hex', 'receiver_retrieve',
-                         'receiver_serial_number', 'receiver_start',
-                         'setTxtProgressBar', 'tag_life',
-                         'tag_pulse_rate_interval_nominal', 'time_diff_lag',
-                         'txtProgressBar', '%>%', 'receiver_end'))
+utils::globalVariables(c(
+  'B2', 'BitPer', 'DateTime_Local', 'Freq', 'Make',
+  'ReceiverSN', 'RefTag', 'SigStr', 'Tag_Decimal',
+  'Tag_Hex', 'Temp', 'Thres', 'Tilt', 'Volt',
+  'fish_release_date', 'lines', 'multipath',
+  'rcvr_fields', 'read.csv', 'read.delim',
+  'receiver_beacon_id_hex', 'receiver_retrieve',
+  'receiver_serial_number', 'receiver_start',
+  'setTxtProgressBar', 'tag_life',
+  'tag_pulse_rate_interval_nominal', 'time_diff_lag',
+  'txtProgressBar', '%>%', 'receiver_end',
+  'td', 'tdiff', 'pr_nom', 'pulse_multiple',
+  'freq_in_range', 'FreqDiff', 'freq_pair_ok',
+  'pr_check', 'tdiff_check', 'pri_metadata_check',
+  'window_pass', 'sequence_pass', 'cs', 'cs_check',
+  'v1', 'v2', 'v3', 'sd_roll_check',
+  'freq_window_check', 'det_count', 'max_interval',
+  'pair_pass', 'CheckMBP', 'TagInFile', 'CheckDT',
+  'CheckBattLife', '.instance', '.source_row',
+  '.sequence_order', '.detection_row_id'
+))
