@@ -16,24 +16,22 @@
 #' # Apply the Lotek filter to a prefiltered dataset with fish and tag
 #' # attributes
 #' second_filter_lotek(filter_fish_detects)
-second_filter_lotek <- function(fish_file){
+
+second_filter_lotek <- function(fish_file) {
 
   filtered <- fish_file
-
-  filtered <- dplyr::group_by(
-    .data = filtered,
-    Tag_Hex
+  filtered$pr <- as.numeric(
+    filtered$tag_pulse_rate_interval_nominal
   )
 
+  # Group and sort before calculating time differences
+  filtered <- dplyr::group_by(filtered, Tag_Hex)
   filtered <- dplyr::arrange(
-    .data = filtered,
-    Tag_Hex,
-    DateTime_Local
+    filtered, Tag_Hex, DateTime_Local
   )
 
   filtered <- dplyr::mutate(
-    .data = filtered,
-
+    filtered,
     td = difftime(
       DateTime_Local,
       dplyr::lag(DateTime_Local),
@@ -42,187 +40,131 @@ second_filter_lotek <- function(fish_file){
   )
 
   det_count <- dplyr::summarise(
-    .data = filtered,
+    filtered,
     det_count = dplyr::n(),
     .groups = "drop"
   )
 
   filtered <- dplyr::left_join(
-    filtered,
-    det_count,
-    by = "Tag_Hex"
+    filtered, det_count, by = "Tag_Hex"
   )
 
-  filtered <- dplyr::group_by(
-    .data = filtered,
-    Tag_Hex
-  )
+  # Identify multipath detections
+  # Existing multipath exception retained
+  filtered <- dplyr::group_by(filtered, Tag_Hex)
 
   filtered <- dplyr::mutate(
-    .data = filtered,
-
+    filtered,
     multipath = !is.na(td) & td <= 0.3,
-
     multipath = ifelse(
-      multipath == TRUE &
-        dplyr::lead(
-          multipath == FALSE,
-          default = FALSE
-        ),
+      multipath &
+        dplyr::lead(!multipath, default = FALSE),
       FALSE,
       multipath
     )
   )
 
-  # FOUR-HIT requirement
   filtered <- dplyr::filter(
-    .data = filtered,
+    filtered,
     det_count > 3,
     multipath == FALSE
   )
 
-  # Recalculate after multipath removal
-  filtered <- dplyr::group_by(
-    .data = filtered,
-    Tag_Hex
-  )
-
+  # Four-hit cumulative time check
+  filtered <- dplyr::group_by(filtered, Tag_Hex)
   filtered <- dplyr::arrange(
-    .data = filtered,
-    Tag_Hex,
-    DateTime_Local
+    filtered, Tag_Hex, DateTime_Local
   )
 
   filtered <- dplyr::mutate(
-    .data = filtered,
+    filtered,
+    cs = difftime(
+      dplyr::lead(DateTime_Local, 3),
+      DateTime_Local,
+      units = "secs"
+    ),
+    cs_check = dplyr::coalesce(
+      cs < pr * 16.6, TRUE
+    )
+  )
 
+  filtered <- dplyr::filter(filtered, cs_check)
+
+  # Recalculate intervals after removing detections
+  filtered <- dplyr::group_by(filtered, Tag_Hex)
+  filtered <- dplyr::arrange(
+    filtered, Tag_Hex, DateTime_Local
+  )
+
+  filtered <- dplyr::mutate(
+    filtered,
     td = difftime(
       DateTime_Local,
       dplyr::lag(DateTime_Local),
       units = "secs"
     ),
-
     tdiff = as.numeric(td) /
-      round(
-        as.numeric(td) /
-          as.numeric(tag_pulse_rate_interval_nominal)
-      ),
-
+      round(as.numeric(td) / pr),
     tdiff = ifelse(
-      is.infinite(tdiff),
-      NA_real_,
-      tdiff
+      is.infinite(tdiff), NA_real_, tdiff
     ),
-
     tdiff = round(tdiff, 2),
-
     tdiff = ifelse(
       is.na(tdiff),
       dplyr::lead(tdiff),
       tdiff
     ),
 
-    # Time spanning four detections
-    cs = difftime(
-      dplyr::lead(DateTime_Local, 3),
-      DateTime_Local,
-      units = "secs"
-    ),
-
-    pr = as.numeric(
-      tag_pulse_rate_interval_nominal
-    ),
-
-    # Last three detections cannot form a forward four-hit
-    # window, so the unavailable check passes.
-    cs_check = dplyr::coalesce(
-      cs < pr * 16.6,
-      TRUE
-    )
-  )
-
-  filtered <- dplyr::filter(
-    .data = filtered,
-    cs_check == TRUE
-  )
-
-  # Rolling comparisons remain grouped by Tag_Hex
-  filtered <- dplyr::group_by(
-    .data = filtered,
-    Tag_Hex
-  )
-
-  filtered <- dplyr::arrange(
-    .data = filtered,
-    Tag_Hex,
-    DateTime_Local
-  )
-
-  filtered <- dplyr::mutate(
-    .data = filtered,
-
+    # Three intervals within the four-hit window
     v1 = dplyr::coalesce(
-      abs(pr - tdiff) <
-        pr * 0.20,
-      TRUE
+      abs(pr - dplyr::lead(tdiff, 1)) <
+        pr * 0.20, TRUE
     ),
-
     v2 = dplyr::coalesce(
-      abs(
-        pr -
-          dplyr::lead(tdiff)
-      ) < pr * 0.20,
-      TRUE
+      abs(pr - dplyr::lead(tdiff, 2)) <
+        pr * 0.20, TRUE
     ),
-
     v3 = dplyr::coalesce(
-      abs(
-        pr -
-          dplyr::lead(tdiff, 2)
-      ) < pr * 0.20,
-      TRUE
+      abs(pr - dplyr::lead(tdiff, 3)) <
+        pr * 0.20, TRUE
     ),
 
+    # Rolling SD of observed normalized intervals
     sd_roll_check = dplyr::coalesce(
       rolling_sd_3(
-        as.numeric(pr)
+        dplyr::lead(tdiff)
       ) < 0.025,
       TRUE
     )
   )
 
   filtered <- dplyr::filter(
-    .data = filtered,
+    filtered,
     v1 == TRUE,
     v2 == TRUE,
     v3 == TRUE,
     sd_roll_check == TRUE
   )
 
+  # Recalculate detection count
   filtered <- dplyr::select(
-    .data = filtered,
-    -det_count,
-    -cs_check
+    filtered, -det_count, -cs_check
   )
 
-  filtered <- dplyr::group_by(
-    .data = filtered,
-    Tag_Hex
-  )
+  filtered <- dplyr::group_by(filtered, Tag_Hex)
 
   det_count <- dplyr::summarise(
-    .data = filtered,
+    filtered,
     det_count = dplyr::n(),
     .groups = "drop"
   )
 
   filtered <- dplyr::left_join(
-    filtered,
-    det_count,
-    by = "Tag_Hex"
+    filtered, det_count, by = "Tag_Hex"
   )
 
   filtered <- dplyr::ungroup(filtered)
 
   filtered
 }
+
