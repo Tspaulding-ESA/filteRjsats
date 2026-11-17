@@ -26,17 +26,31 @@ prefilter <- function(jsats_file, reference_tags) {
     !is.na(Tag_Hex), Tag_Hex != "",
     !is.na(DateTime_Local)
   )
+  if (!inherits(temp$DateTime_Local, "POSIXt")) {
+    stop("DateTime_Local must be POSIXct/POSIXlt", call. = FALSE)
+  }
   temp <- dplyr::arrange(temp, ReceiverSN, Tag_Hex, DateTime_Local)
-  temp <- dplyr::group_by(temp, ReceiverSN, Tag_Hex)
-  temp <- dplyr::mutate(
-    temp,
-    time_diff_lag = as.numeric(difftime(
-      DateTime_Local, dplyr::lag(DateTime_Local), units = "secs"
-    )),
-    multipath = !is.na(time_diff_lag) & time_diff_lag <= 0.3
-  )
-  # Keep the first observation in a sub-0.3-second cluster.
-  temp <- dplyr::filter(temp, !multipath)
+
+  # Compare each candidate against the LAST RETAINED hit, not the preceding
+  # raw hit, which may itself be multipath. Otherwise a chain such as
+  # 0.0, 0.2, 0.4 s incorrectly loses the 0.4-s detection.
+  # Process separately by receiver and tag, in chronological order.
+  times <- as.numeric(temp$DateTime_Local)
+  receivers <- as.character(temp$ReceiverSN)
+  tags <- temp$Tag_Hex
+  retained <- logical(nrow(temp))
+  last_retained_time <- -Inf
+  for (i in seq_len(nrow(temp))) {
+    if (i == 1L || receivers[i] != receivers[i - 1L] ||
+        tags[i] != tags[i - 1L]) {
+      last_retained_time <- -Inf
+    }
+    if (times[i] - last_retained_time > 0.3) {
+      retained[i] <- TRUE
+      last_retained_time <- times[i]
+    }
+  }
+  temp <- temp[retained, , drop = FALSE]
   temp <- dplyr::arrange(temp, ReceiverSN, Tag_Hex, DateTime_Local)
   temp <- dplyr::group_by(temp, ReceiverSN, Tag_Hex)
   temp <- dplyr::mutate(
@@ -57,7 +71,7 @@ prefilter <- function(jsats_file, reference_tags) {
   )
   temp <- dplyr::filter(temp, CheckMBP == TRUE)
   temp <- dplyr::ungroup(temp)
-  temp <- dplyr::select(temp, -time_diff_lag, -multipath,
+  temp <- dplyr::select(temp, -time_diff_lag,
                          -RefTag, -max_interval, -pair_pass)
   dplyr::arrange(temp, ReceiverSN, Tag_Hex, DateTime_Local)
 }
