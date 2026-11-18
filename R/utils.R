@@ -55,6 +55,7 @@ run_second_filter <- function(fish_file, four_hit = FALSE) {
     message("No detections to evaluate")
     out <- dplyr::ungroup(fish_file)
     out$spurious <- logical(0)
+    out$reject_code <- character(0)
     return(out)
   }
   fish_file <- dplyr::ungroup(fish_file)
@@ -72,27 +73,27 @@ run_second_filter <- function(fish_file, four_hit = FALSE) {
     stop(".detection_row_id must be unique and non-missing", call. = FALSE)
   }
 
-  valid <- switch(
+  out <- switch(
     makes,
-    ATS = if (four_hit) second_filter_ats_4h(fish_file)
-          else second_filter_ats(fish_file),
-    Tekno = if (four_hit) second_filter_tekno_4h(fish_file)
-            else second_filter_tekno(fish_file),
-    Lotek = second_filter_lotek(fish_file)
+    ATS = if (four_hit) second_filter_ats_4h(fish_file, .include_rejected = TRUE)
+          else second_filter_ats(fish_file, .include_rejected = TRUE),
+    Tekno = if (four_hit) second_filter_tekno_4h(fish_file, .include_rejected = TRUE)
+            else second_filter_tekno(fish_file, .include_rejected = TRUE),
+    Lotek = second_filter_lotek(fish_file, .include_rejected = TRUE)
   )
-  spur <- compare_detects(fish_file, valid)
-  valid$spurious <- FALSE
-  spur$spurious <- TRUE
-  out <- dplyr::bind_rows(valid, spur)
   out <- dplyr::arrange(out, ReceiverSN, Tag_Hex,
                         DateTime_Local, .detection_row_id)
   if (nrow(out) != nrow(fish_file) ||
-      anyDuplicated(out$.detection_row_id)) {
-    stop("Filtering lost or duplicated source detection rows", call. = FALSE)
+      anyDuplicated(out$.detection_row_id) ||
+      anyNA(out$spurious) ||
+      any(out$spurious & is.na(out$reject_code)) ||
+      any(!out$spurious & !is.na(out$reject_code))) {
+    stop("Filtering lost rows or produced inconsistent rejection codes",
+         call. = FALSE)
   }
-  message("Valid tags: ", length(unique(valid$Tag_Hex)),
-          "; valid detections: ", nrow(valid),
-          "; spurious detections: ", nrow(spur))
+  message("Valid tags: ", length(unique(out$Tag_Hex[!out$spurious])),
+          "; valid detections: ", sum(!out$spurious),
+          "; spurious detections: ", sum(out$spurious))
   out
 }
 
@@ -115,6 +116,7 @@ utils::globalVariables(c(
   'v1', 'v2', 'v3', 'sd_roll_check',
   'freq_window_check', 'det_count', 'max_interval',
   'pair_pass', 'CheckMBP', 'TagInFile', 'CheckDT',
+  'reject_code', 'timing_support',
   'CheckBattLife', '.instance', '.source_row',
   '.sequence_order', '.detection_row_id'
 ))

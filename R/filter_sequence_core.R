@@ -2,12 +2,16 @@
 # A detection passes only if it participates in at least one COMPLETE,
 # qualifying two- or four-hit sequence on the same receiver and tag.
 # Intervening nonqualifying hits do not break a genuinely qualifying sequence.
+# When include_rejected = TRUE, assign a single primary reject_code per row:
+# multipath > invalid individual frequency > frequency-inconsistent supported
+# timing sequence > missing/failed PRI or incomplete sequence evidence.
 #' @keywords internal
 filter_detection_sequences <- function(fish_file, hits,
                                        frequency_bounds = NULL,
                                        frequency_tolerance = NULL,
                                        frequency_inclusive = FALSE,
-                                       require_short_window_edges = FALSE) {
+                                       require_short_window_edges = FALSE,
+                                       include_rejected = FALSE) {
   if (!hits %in% c(2L, 4L)) {
     stop("hits must be 2 or 4", call. = FALSE)
   }
@@ -26,7 +30,13 @@ filter_detection_sequences <- function(fish_file, hits,
       (length(frequency_bounds) != 2L || is.null(frequency_tolerance))) {
     stop("Frequency bounds and tolerance must both be supplied", call. = FALSE)
   }
-  if (nrow(fish_file) == 0L) return(fish_file)
+  if (nrow(fish_file) == 0L) {
+    if (!include_rejected) return(fish_file)
+    out <- dplyr::ungroup(fish_file)
+    out$spurious <- logical(0)
+    out$reject_code <- character(0)
+    return(out)
+  }
 
   out <- dplyr::ungroup(fish_file)
   out$pr_nom <- suppressWarnings(as.numeric(out$tag_pulse_rate_interval_nominal))
@@ -41,6 +51,9 @@ filter_detection_sequences <- function(fish_file, hits,
   out$multipath <- rep(FALSE, n)
   out$window_pass <- rep(FALSE, n)
   out$sequence_pass <- rep(FALSE, n)
+  # A complete, PRI-valid sequence, even if its frequency checks fail.
+  # This is diagnostic only; it cannot cause a detection to be accepted.
+  out$timing_support <- rep(FALSE, n)
   if (!is.null(frequency_bounds)) {
     out$FreqDiff <- rep(NA_real_, n)
   }
@@ -99,7 +112,9 @@ filter_detection_sequences <- function(fish_file, hits,
 
       # The same interval/PRI and frequency equations apply to both technologies
       # and both hit-count modes; only tolerances and window sizes differ.
-      edge_ok <- function(a, b, nominal, tolerance) {
+      # Separate timing and frequency evidence so rejection codes describe
+      # why an otherwise qualifying temporal sequence was not accepted.
+      edge_timing_ok <- function(a, b, nominal, tolerance) {
         gap <- times[b] - times[a]
         if (!is.finite(gap) || gap <= 0.3 ||
             !is.finite(pri[b]) || pri[b] != nominal) return(FALSE)
@@ -108,6 +123,9 @@ filter_detection_sequences <- function(fish_file, hits,
             abs(gap / pulse_count - nominal) >= nominal * tolerance) {
           return(FALSE)
         }
+        TRUE
+      }
+      edge_freq_ok <- function(a, b) {
         if (!freq_ok[a] || !freq_ok[b]) return(FALSE)
         if (!is.null(frequency_bounds) &&
             !(abs(freq[b] - freq[a]) < frequency_tolerance)) return(FALSE)
@@ -122,30 +140,37 @@ filter_detection_sequences <- function(fish_file, hits,
             gap <- times[j] - times[i]
             if (gap >= 4 * nominal) break
             if (gap <= 0.8 * nominal ||
-                !edge_ok(i, j, nominal, 0.10)) next
+                !edge_timing_ok(i, j, nominal, 0.10)) next
+            pair <- idx[c(i, j)]
+            out$timing_support[pair] <- TRUE
+            if (!edge_freq_ok(i, j)) next
             out$window_pass[idx[i]] <- TRUE
-            out$sequence_pass[idx[c(i, j)]] <- TRUE
+            out$sequence_pass[pair] <- TRUE
           }
         } else {
           for (j in seq.int(i + 1L, m - 2L)) {
             gap1 <- times[j] - times[i]
             if (gap1 >= 16.6 * nominal) break
             if (require_short_window_edges && gap1 >= 4 * nominal) break
-            if (!edge_ok(i, j, nominal, 0.20)) next
+            if (!edge_timing_ok(i, j, nominal, 0.20)) next
             for (k in seq.int(j + 1L, m - 1L)) {
               if (times[k] - times[i] >= 16.6 * nominal) break
-              if (!edge_ok(j, k, nominal, 0.20)) next
+              if (!edge_timing_ok(j, k, nominal, 0.20)) next
               for (l in seq.int(k + 1L, m)) {
                 if (times[l] - times[i] >= 16.6 * nominal) break
                 gap3 <- times[l] - times[k]
                 if (require_short_window_edges && gap3 >= 4 * nominal) break
-                if (!edge_ok(k, l, nominal, 0.20)) next
+                if (!edge_timing_ok(k, l, nominal, 0.20)) next
                 intervals <- c(gap1, times[k] - times[j], gap3)
                 normalized <- intervals / round(intervals / nominal)
                 if (!all(is.finite(normalized)) ||
                     !(stats::sd(normalized) < 0.025)) next
+                window <- idx[c(i, j, k, l)]
+                out$timing_support[window] <- TRUE
+                if (!edge_freq_ok(i, j) || !edge_freq_ok(j, k) ||
+                    !edge_freq_ok(k, l)) next
                 out$window_pass[idx[i]] <- TRUE
-                out$sequence_pass[idx[c(i, j, k, l)]] <- TRUE
+                out$sequence_pass[window] <- TRUE
               }
             }
           }
@@ -154,9 +179,38 @@ filter_detection_sequences <- function(fish_file, hits,
     }
   }
 
-  out <- out[out$sequence_pass, , drop = FALSE]
-  out <- dplyr::group_by(out, ReceiverSN, Tag_Hex)
-  out <- dplyr::mutate(out, det_count = dplyr::n())
-  out <- dplyr::ungroup(out)
-  dplyr::select(out, -.sequence_order)
+  # Compute accepted detection counts without changing the accepted set.
+  accepted <- out[out$sequence_pass, , drop = FALSE]
+  accepted <- dplyr::group_by(accepted, ReceiverSN, Tag_Hex)
+  accepted <- dplyr::mutate(accepted, det_count = dplyr::n())
+  accepted <- dplyr::ungroup(accepted)
+  if (!include_rejected) {
+    return(dplyr::select(accepted, -.sequence_order, -timing_support))
+  }
+
+  # Always return ALL original rows, with one primary rejection reason.
+  # "pri" includes missing PRI, invalid intervals, excessive PRI variation,
+  # and fewer than the required 2 or 4 qualifying hits.
+  out$det_count <- rep(NA_integer_, n)
+  out$det_count[out$sequence_pass] <- accepted$det_count
+  out$spurious <- !out$sequence_pass
+  out$reject_code <- rep(NA_character_, n)
+  out$reject_code[out$spurious] <- "pri"
+
+  if (!is.null(frequency_bounds)) {
+    freq <- out$Freq
+    bad_freq <- !is.finite(freq)
+    if (frequency_inclusive) {
+      bad_freq <- bad_freq | freq < frequency_bounds[1] |
+        freq > frequency_bounds[2]
+    } else {
+      bad_freq <- bad_freq | freq <= frequency_bounds[1] |
+        freq >= frequency_bounds[2]
+    }
+    bad_freq[is.na(bad_freq)] <- TRUE
+    out$reject_code[out$spurious &
+                      (out$timing_support | bad_freq)] <- "freq"
+  }
+  out$reject_code[out$multipath] <- "multipath"
+  dplyr::select(out, -.sequence_order, -timing_support)
 }
