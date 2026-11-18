@@ -40,6 +40,50 @@ stopifnot(nrow(pre) == 2L)
 stopifnot(all(pre$Tag_Hex == "A"))
 stopifnot(all(pre$CheckMBP))
 
+# Multipath comparisons must use the last RETAINED hit, never the previous
+# raw observation. Old logic mistakenly discarded 0.4 after discarding 0.2.
+chain <- mk("CHAIN", c(0, 0.2, 0.4, 5.6), freq = rep(417, 4))
+chain_pre <- prefilter(chain, reference_tags = character())
+chain_offsets <- as.numeric(difftime(
+  chain_pre$DateTime_Local, chain$DateTime_Local[1], units = "secs"
+))
+stopifnot(nrow(chain_pre) == 3L,
+          isTRUE(all.equal(chain_offsets, c(0, 0.4, 5.6),
+                           tolerance = 1e-5)))
+# Correct prefilter suppression must preserve the valid 0.4-to-5.6-s pair.
+chain_fish <- second_filter_ats(chain_pre)
+chain_fish_offsets <- as.numeric(difftime(
+  chain_fish$DateTime_Local, chain$DateTime_Local[1], units = "secs"
+))
+stopifnot(nrow(chain_fish) == 2L,
+          isTRUE(all.equal(chain_fish_offsets, c(0.4, 5.6),
+                           tolerance = 1e-5)))
+chain_classified <- second_filter_2h4h(chain_pre)
+stopifnot(nrow(chain_classified) == 3L,
+          sum(!chain_classified$spurious) == 2L,
+          sum(chain_classified$spurious) == 1L)
+
+# The same greedy suppression must apply within each receiver/tag separately.
+# A second receiver's observations must not be suppressed by the first.
+chain_other_receiver <- mk("CHAIN", c(0.1, 5.1),
+                           receiver = "other", freq = c(417, 417))
+chain_both <- prefilter(rbind(chain, chain_other_receiver), character())
+stopifnot(nrow(chain_both) == 5L,
+          sum(chain_both$ReceiverSN == "test") == 3L,
+          sum(chain_both$ReceiverSN == "other") == 2L)
+
+# A long run of short-interval detections should not suppress later candidates
+# once they are >0.3 seconds after the last retained observation.
+chain_long <- mk("CHAIN2", c(0, 0.1, 0.2, 0.45, 0.5, 5.45),
+                 freq = rep(417, 6))
+chain_long_pre <- prefilter(chain_long, character())
+long_offsets <- as.numeric(difftime(
+  chain_long_pre$DateTime_Local, chain_long$DateTime_Local[1], units = "secs"
+))
+stopifnot(nrow(chain_long_pre) == 3L,
+          isTRUE(all.equal(long_offsets, c(0, 0.45, 5.45),
+                           tolerance = 1e-5)))
+
 # Four-hit support propagates to all members of a COMPLETE qualifying window.
 ats4 <- rbind(mk("A", c(0, 5, 10, 15), freq = rep(416.5, 4)),
               mk("B", c(0, 5, 10), freq = rep(416.5, 3)))
@@ -139,3 +183,104 @@ fish_dupe <- data.frame(
 obs_dupe <- mk("7EF2", 0, freq = 417)
 obs_dupe$DateTime_Local <- as.POSIXct("2026-05-01", tz = "UTC")
 stopifnot(nrow(add_fish(obs_dupe, fish_dupe)) == 2L)
+
+# Rejection reasons are consistent across 2-hit and 4-hit dispatchers.
+# Every raw input row survives, with exactly one primary code when spurious.
+check_codes <- function(x, filter_function) {
+  result <- filter_function(x)
+  stopifnot(nrow(result) == nrow(x),
+            identical(sort(result$.detection_row_id),
+                      seq_len(nrow(result))),
+            all(result$reject_code[result$spurious] %in%
+                  c("multipath", "freq", "pri")),
+            all(is.na(result$reject_code[!result$spurious])))
+  result
+}
+
+# The row order is chronological within each tag in this synthetic set.
+ats_codes <- rbind(
+  mk("GOOD", c(0, 5), freq = c(417, 417)),
+  mk("MP", c(0, 0.2, 5), freq = rep(417, 3)),
+  mk("FREQ", c(0, 5), freq = c(417, 418)),
+  mk("OUT", c(0, 5), freq = c(415.9, 417)),
+  mk("PRI", c(0, 50), freq = c(417, 417)),
+  mk("NOM", c(0, 5), freq = c(417, 417), pri = NA_real_),
+  mk("NAF", c(0, 5), freq = c(417, NA_real_))
+)
+ats_codes$.detection_row_id <- seq_len(nrow(ats_codes))
+ats_checked <- check_codes(ats_codes, second_filter_2h4h)
+get_codes <- function(x, tag) x$reject_code[x$Tag_Hex == tag]
+stopifnot(identical(get_codes(ats_checked, "GOOD"),
+                    c(NA_character_, NA_character_)),
+          identical(get_codes(ats_checked, "MP"),
+                    c(NA_character_, "multipath", NA_character_)),
+          identical(get_codes(ats_checked, "FREQ"), c("freq", "freq")),
+          identical(get_codes(ats_checked, "OUT"), c("freq", "freq")),
+          identical(get_codes(ats_checked, "PRI"), c("pri", "pri")),
+          identical(get_codes(ats_checked, "NOM"), c("pri", "pri")),
+          identical(get_codes(ats_checked, "NAF"), c("freq", "freq")))
+
+# Four-hit ATS: frequency violation in an otherwise valid timing window;
+# insufficient complete-window evidence must be pri, not a silent pass.
+ats_four_codes <- rbind(
+  mk("OK4", c(0, 5, 10, 15), freq = rep(417, 4)),
+  mk("FREQ4", c(0, 5, 10, 15), freq = c(417, 417, 418, 418)),
+  mk("SHORT4", c(0, 5, 10), freq = rep(417, 3)),
+  mk("MP4", c(0, 0.2, 5, 10, 15), freq = rep(417, 5))
+)
+ats_four_codes$.detection_row_id <- seq_len(nrow(ats_four_codes))
+ats_four_checked <- check_codes(ats_four_codes, second_filter_4h)
+stopifnot(all(is.na(get_codes(ats_four_checked, "OK4"))),
+          identical(get_codes(ats_four_checked, "FREQ4"),
+                    rep("freq", 4)),
+          identical(get_codes(ats_four_checked, "SHORT4"),
+                    rep("pri", 3)),
+          identical(get_codes(ats_four_checked, "MP4"),
+                    c(NA_character_, "multipath", rep(NA_character_, 3))))
+
+# Tekno two-hit and four-hit use the same reasons but 390-445 kHz bounds.
+tek_codes <- rbind(
+  mk("OK", c(0, 5), make = "Tekno", freq = c(417, 417)),
+  mk("FREQ", c(0, 5), make = "Tekno", freq = c(389, 417)),
+  mk("PRI", c(0, 50), make = "Tekno", freq = c(417, 417))
+)
+tek_codes$.detection_row_id <- seq_len(nrow(tek_codes))
+tek_checked <- check_codes(tek_codes, second_filter_2h4h)
+stopifnot(all(is.na(get_codes(tek_checked, "OK"))),
+          identical(get_codes(tek_checked, "FREQ"), c("freq", "freq")),
+          identical(get_codes(tek_checked, "PRI"), c("pri", "pri")))
+
+tek_four_codes <- rbind(
+  mk("OK4", c(0, 5, 10, 15), make = "Tekno", freq = rep(417, 4)),
+  mk("FREQ4", c(0, 5, 10, 15), make = "Tekno", freq = c(417, 389, 417, 417)),
+  mk("SHORT4", c(0, 5, 10), make = "Tekno", freq = rep(417, 3))
+)
+tek_four_codes$.detection_row_id <- seq_len(nrow(tek_four_codes))
+tek_four_checked <- check_codes(tek_four_codes, second_filter_4h)
+stopifnot(all(is.na(get_codes(tek_four_checked, "OK4"))),
+          identical(get_codes(tek_four_checked, "FREQ4"),
+                    rep("freq", 4)),
+          identical(get_codes(tek_four_checked, "SHORT4"),
+                    rep("pri", 3)))
+
+# Lotek has no frequency criterion, so its rejections are multipath or pri.
+lot_codes <- rbind(
+  mk("OK4", c(0, 5, 10, 15), make = "Lotek"),
+  mk("MP4", c(0, 0.2, 5, 10, 15), make = "Lotek"),
+  mk("SHORT4", c(0, 5, 10), make = "Lotek"),
+  mk("SD4", c(0, 5.1, 10, 15), make = "Lotek")
+)
+lot_codes$.detection_row_id <- seq_len(nrow(lot_codes))
+lot_checked <- check_codes(lot_codes, second_filter_4h)
+stopifnot(all(is.na(get_codes(lot_checked, "OK4"))),
+          identical(get_codes(lot_checked, "MP4"),
+                    c(NA_character_, "multipath", rep(NA_character_, 3))),
+          identical(get_codes(lot_checked, "SHORT4"),
+                    rep("pri", 3)),
+          identical(get_codes(lot_checked, "SD4"),
+                    rep("pri", 4)),
+          !any(lot_checked$reject_code == "freq", na.rm = TRUE))
+
+# Empty outputs have both classification columns, with character reject_code.
+stopifnot("reject_code" %in% names(empty))
+stopifnot(is.character(empty$reject_code))
