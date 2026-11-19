@@ -46,16 +46,18 @@ filter_detection_sequences <- function(fish_file, hits,
   out$.sequence_order <- seq_len(nrow(out))
   out <- dplyr::arrange(out, ReceiverSN, Tag_Hex, DateTime_Local, .sequence_order)
   n <- nrow(out)
-  out$td <- rep(NA_real_, n)
-  out$tdiff <- rep(NA_real_, n)
-  out$multipath <- rep(FALSE, n)
-  out$window_pass <- rep(FALSE, n)
-  out$sequence_pass <- rep(FALSE, n)
-  # A complete, PRI-valid sequence, even if its frequency checks fail.
-  # This is diagnostic only; it cannot cause a detection to be accepted.
-  out$timing_support <- rep(FALSE, n)
+  # Mutable standalone vectors: repeated out$column[index] assignments inside
+  # the inner loops can repeatedly duplicate a large data frame. Compute the
+  # same flags separately, then attach them in their original column order.
+  td <- rep(NA_real_, n)
+  tdiff <- rep(NA_real_, n)
+  multipath <- rep(FALSE, n)
+  window_pass <- rep(FALSE, n)
+  sequence_pass <- rep(FALSE, n)
+  # Complete PRI-valid sequence evidence, regardless of frequency.
+  timing_support <- rep(FALSE, n)
   if (!is.null(frequency_bounds)) {
-    out$FreqDiff <- rep(NA_real_, n)
+    FreqDiff <- rep(NA_real_, n)
   }
 
   # Use observed, ordered detections. Group boundaries include receiver AND tag.
@@ -75,7 +77,7 @@ filter_detection_sequences <- function(fish_file, hits,
       last_time <- -Inf
       for (q in seq_along(idx)) {
         if (times_all[q] - last_time <= 0.3) {
-          out$multipath[idx[q]] <- TRUE
+          multipath[idx[q]] <- TRUE
         } else {
           retained[q] <- TRUE
           last_time <- times_all[q]
@@ -87,17 +89,17 @@ filter_detection_sequences <- function(fish_file, hits,
       times <- as.numeric(out$DateTime_Local[idx])
       pri <- out$pr_nom[idx]
       delta <- c(NA_real_, diff(times))
-      out$td[idx] <- delta
+      td[idx] <- delta
       multiple <- round(delta / pri)
       good_multiple <- is.finite(pri) & pri > 0 &
         is.finite(multiple) & multiple >= 1
       normalized <- rep(NA_real_, m)
       normalized[good_multiple] <-
         delta[good_multiple] / multiple[good_multiple]
-      out$tdiff[idx] <- normalized
+      tdiff[idx] <- normalized
       if (!is.null(frequency_bounds)) {
         freq <- out$Freq[idx]
-        out$FreqDiff[idx] <- c(abs(diff(freq)), NA_real_)
+        FreqDiff[idx] <- c(abs(diff(freq)), NA_real_)
         in_range <- if (frequency_inclusive) {
           freq >= frequency_bounds[1] & freq <= frequency_bounds[2]
         } else {
@@ -142,10 +144,10 @@ filter_detection_sequences <- function(fish_file, hits,
             if (gap <= 0.8 * nominal ||
                 !edge_timing_ok(i, j, nominal, 0.10)) next
             pair <- idx[c(i, j)]
-            out$timing_support[pair] <- TRUE
+            timing_support[pair] <- TRUE
             if (!edge_freq_ok(i, j)) next
-            out$window_pass[idx[i]] <- TRUE
-            out$sequence_pass[pair] <- TRUE
+            window_pass[idx[i]] <- TRUE
+            sequence_pass[pair] <- TRUE
           }
         } else {
           for (j in seq.int(i + 1L, m - 2L)) {
@@ -166,17 +168,29 @@ filter_detection_sequences <- function(fish_file, hits,
                 if (!all(is.finite(normalized)) ||
                     !(stats::sd(normalized) < 0.025)) next
                 window <- idx[c(i, j, k, l)]
-                out$timing_support[window] <- TRUE
+                timing_support[window] <- TRUE
                 if (!edge_freq_ok(i, j) || !edge_freq_ok(j, k) ||
                     !edge_freq_ok(k, l)) next
-                out$window_pass[idx[i]] <- TRUE
-                out$sequence_pass[window] <- TRUE
+                window_pass[idx[i]] <- TRUE
+                sequence_pass[window] <- TRUE
               }
             }
           }
         }
       }
     }
+  }
+
+  # Restore the original output schema and column positions; no acceptance
+  # or rejection criterion has been altered by this optimization.
+  out$td <- td
+  out$tdiff <- tdiff
+  out$multipath <- multipath
+  out$window_pass <- window_pass
+  out$sequence_pass <- sequence_pass
+  out$timing_support <- timing_support
+  if (!is.null(frequency_bounds)) {
+    out$FreqDiff <- FreqDiff
   }
 
   # Compute accepted detection counts without changing the accepted set.
