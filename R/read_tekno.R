@@ -6,15 +6,15 @@
 #'
 #' @param path the path to the folder containing the desired file
 #' @param file the path of the desired file
-#' @param timezone the Olsen Named time zone, default is "America/Los_Angeles"
+#' @param timezone the time zone of recorded clock readings; fixed PST (Etc/GMT+8) by default, without daylight saving time
 #' @returns A dataframe converting the raw detection data into rows of detections
 #' @export
 #' @examples
 #' # Read in a Teknologic file
 #' path = system.file("extdata/", package = "filteRjsats")
 #' read_tekno(path = path, file = "2015-6007211361217.SUM",
-#' timezone = "America/Los_Angeles")
-read_tekno <- function(path, file, timezone="America/Los_Angeles"){
+#' timezone = "Etc/GMT+8")
+read_tekno <- function(path, file, timezone="Etc/GMT+8"){
 
   TEK <- read.csv(file.path(path,file),
                   colClasses = c(character(),character(),character(),

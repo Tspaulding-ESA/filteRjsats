@@ -7,7 +7,7 @@
 #'
 #' @param path the path to the folder containing the desired file
 #' @param file the path of the desired file
-#' @param timezone the Olsen Named time zone, default is "America/Los_Angeles"
+#' @param timezone the time zone of recorded clock readings; fixed PST (Etc/GMT+8) by default, without daylight saving time
 #' @param sensor Logical, does the tag have an environmental sensor? default is FALSE
 #' @returns A dataframe converting the raw detection data into rows of detections
 #' @export
@@ -22,11 +22,11 @@
 #' raw_data <- list()
 #' for(i in 1:length(files)){
 #' raw_data[[i]] <- read_jsats(path = path, file = files[i],
-#' timezone = "America/Los_Angeles")
+#' timezone = "Etc/GMT+8")
 #' }
 #' # Warnings are expected due to the formatting of ATS files
 read_jsats <- function(path, file, sensor = FALSE,
-                       timezone="America/Los_Angeles"){
+                       timezone="Etc/GMT+8"){
   # file_name <- stringr::str_split(file, pattern = '\\.')[[1]][1]
   file_type <- ifelse(stringr::str_detect(file,'.SUM'),
                              "Teknologic",

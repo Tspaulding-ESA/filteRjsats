@@ -6,13 +6,13 @@
 #'
 #' @param path the path to the folder containing the desired file
 #' @param file the path of the desired file
-#' @param timezone the Olsen Named time zone, default is "America/Los_Angeles"
+#' @param timezone the time zone of recorded clock readings; fixed PST (Etc/GMT+8) by default, without daylight saving time
 #' @returns A dataframe converting the raw detection data into rows of detections
 #' @export
 #' @examples
 #' # see read_ats or read_tekno for example usage
 #'
-read_lotek <- function(path, file, timezone="America/Los_Angeles"){
+read_lotek <- function(path, file, timezone="Etc/GMT+8"){
   #Some Lotek Files have a superheader, find out if this one does
   superheader = any(grepl("Superheader Section", readLines(con = file.path(path,file),
                         n = 10)))
