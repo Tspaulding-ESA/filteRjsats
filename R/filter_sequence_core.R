@@ -134,6 +134,45 @@ filter_detection_sequences <- function(fish_file, hits,
         TRUE
       }
 
+      if (hits == 4L) {
+        # Build each timing-valid connection once. Edges are grouped by
+        # source index, and remain ordered by detection time. A valid path
+        # i -> j -> k -> l necessarily has a single nominal PRI because
+        # edge_timing_ok requires pri[destination] == pri[source].
+        edge_to <- vector('list', m)
+        edge_normalized <- vector('list', m)
+        edge_frequency <- vector('list', m)
+        # +1 index guards rounding at an absolute POSIXct epoch boundary;
+        # exact differences below always enforce strict < 16.6 * PRI.
+        nominal_valid <- is.finite(pri) & pri > 0
+        upper <- times + 16.6 * ifelse(nominal_valid, pri, 0)
+        max_neighbor <- findInterval(upper, times)
+        for (a in seq_len(m - 1L)) {
+          if (!nominal_valid[a]) next
+          last <- min(m, max_neighbor[a] + 1L)
+          if (last <= a) next
+          b <- seq.int(a + 1L, last)
+          gap <- times[b] - times[a]
+          steps <- round(gap / pri[a])
+          good <- is.finite(gap) & gap > 0.3 &
+            gap < 16.6 * pri[a] & is.finite(pri[b]) &
+            pri[b] == pri[a] & is.finite(steps) & steps >= 1 &
+            abs(gap / steps - pri[a]) < pri[a] * 0.20
+          good[is.na(good)] <- FALSE
+          if (!any(good)) next
+          b <- b[good]
+          edge_to[[a]] <- b
+          edge_normalized[[a]] <- gap[good] / steps[good]
+          if (is.null(frequency_bounds)) {
+            edge_frequency[[a]] <- rep(TRUE, length(b))
+          } else {
+            edge_frequency[[a]] <- freq_ok[a] & freq_ok[b] &
+              abs(freq[b] - freq[a]) < frequency_tolerance
+            edge_frequency[[a]][is.na(edge_frequency[[a]])] <- FALSE
+          }
+        }
+      }
+
       for (i in seq_len(m - hits + 1L)) {
         nominal <- pri[i]
         if (!is.finite(nominal) || nominal <= 0) next
@@ -150,30 +189,68 @@ filter_detection_sequences <- function(fish_file, hits,
             sequence_pass[pair] <- TRUE
           }
         } else {
-          for (j in seq.int(i + 1L, m - 2L)) {
-            gap1 <- times[j] - times[i]
-            if (gap1 >= 16.6 * nominal) break
-            if (require_short_window_edges && gap1 >= 4 * nominal) break
-            if (!edge_timing_ok(i, j, nominal, 0.20)) next
-            for (k in seq.int(j + 1L, m - 1L)) {
-              if (times[k] - times[i] >= 16.6 * nominal) break
-              if (!edge_timing_ok(j, k, nominal, 0.20)) next
-              for (l in seq.int(k + 1L, m)) {
-                if (times[l] - times[i] >= 16.6 * nominal) break
-                gap3 <- times[l] - times[k]
-                if (require_short_window_edges && gap3 >= 4 * nominal) break
-                if (!edge_timing_ok(k, l, nominal, 0.20)) next
-                intervals <- c(gap1, times[k] - times[j], gap3)
-                normalized <- intervals / round(intervals / nominal)
-                if (!all(is.finite(normalized)) ||
-                    !(stats::sd(normalized) < 0.025)) next
-                window <- idx[c(i, j, k, l)]
-                timing_support[window] <- TRUE
-                if (!edge_freq_ok(i, j) || !edge_freq_ok(j, k) ||
-                    !edge_freq_ok(k, l)) next
-                window_pass[idx[i]] <- TRUE
-                sequence_pass[window] <- TRUE
+          # Phase 2 experiment: cache timing-valid candidate edges once for
+          # every source hit; enumerate 4-hit paths via these edges, rather
+          # than scanning/retesting all raw j/k/l candidates for each i.
+          # Edge values are already constrained to the same nominal PRI.
+          j_pos <- edge_to[[i]]
+          if (!length(j_pos)) next
+          keep_j <- j_pos <= m - 2L
+          if (require_short_window_edges) {
+            keep_j <- keep_j & (times[j_pos] - times[i] < 4 * nominal)
+          }
+          if (!any(keep_j)) next
+          j_vals <- j_pos[keep_j]
+          norm_j <- edge_normalized[[i]][keep_j]
+          freq_j <- edge_frequency[[i]][keep_j]
+          for (jj in seq_along(j_vals)) {
+            j <- j_vals[jj]
+            k_pos <- edge_to[[j]]
+            if (!length(k_pos)) next
+            keep_k <- k_pos <= m - 1L &
+              (times[k_pos] - times[i] < 16.6 * nominal)
+            if (!any(keep_k)) next
+            k_vals <- k_pos[keep_k]
+            norm_k <- edge_normalized[[j]][keep_k]
+            freq_k <- edge_frequency[[j]][keep_k]
+            for (kk in seq_along(k_vals)) {
+              k <- k_vals[kk]
+              l_pos <- edge_to[[k]]
+              if (!length(l_pos)) next
+              keep_l <- times[l_pos] - times[i] < 16.6 * nominal
+              if (require_short_window_edges) {
+                keep_l <- keep_l &
+                  (times[l_pos] - times[k] < 4 * nominal)
               }
+              if (!any(keep_l)) next
+              l_vals <- l_pos[keep_l]
+              norm_l <- edge_normalized[[k]][keep_l]
+              freq_l <- edge_frequency[[k]][keep_l]
+              # Vectorized 3-observation sample SD. Use stats::sd for
+              # candidates near the exact decision boundary, preserving
+              # the reference implementation's strict < 0.025 threshold.
+              x <- norm_j[jj]
+              y <- norm_k[kk]
+              sd_vals <- sqrt(((x - y)^2 + (x - norm_l)^2 +
+                               (y - norm_l)^2) / 6)
+              borderline <- which(is.finite(sd_vals) &
+                abs(sd_vals - 0.025) < 1e-9)
+              if (length(borderline)) {
+                sd_vals[borderline] <- vapply(borderline, function(z) {
+                  stats::sd(c(x, y, norm_l[z]))
+                }, numeric(1))
+              }
+              good_l <- which(is.finite(sd_vals) & sd_vals < 0.025)
+              if (!length(good_l)) next
+              l_ok <- l_vals[good_l]
+              timing_support[idx[c(i, j, k, l_ok)]] <- TRUE
+              # Frequency must be valid on all three edges, but cannot
+              # alter whether a complete timing-valid window exists.
+              if (!freq_j[jj] || !freq_k[kk]) next
+              pass_l <- l_ok[freq_l[good_l]]
+              if (!length(pass_l)) next
+              window_pass[idx[i]] <- TRUE
+              sequence_pass[idx[c(i, j, k, pass_l)]] <- TRUE
             }
           }
         }
